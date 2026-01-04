@@ -16,6 +16,7 @@ dependencies = [
     "pydantic-settings>=2.7",
     "watchfiles>=1.0",
     "rich>=13.9",
+    "logfire[httpx]>=4.16.0",
 ]
 
 [project.optional-dependencies]

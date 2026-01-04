@@ -3,6 +3,7 @@
 from pathlib import Path
 from typing import Any
 
+import logfire
 from rich.console import Console
 
 from ha_sync.client import HAClient
@@ -34,21 +35,23 @@ class AutomationSyncer(BaseSyncer):
 
     async def get_remote_entities(self) -> dict[str, dict[str, Any]]:
         """Get all automations from Home Assistant."""
-        automations = await self.client.get_automations()
-        result: dict[str, dict[str, Any]] = {}
+        with logfire.span("Fetch remote automations"):
+            automations = await self.client.get_automations()
+            result: dict[str, dict[str, Any]] = {}
 
-        for automation in automations:
-            # The internal ID is in attributes, not the entity_id suffix
-            auto_id = automation.get("attributes", {}).get("id")
-            if not auto_id:
-                continue
+            for automation in automations:
+                # The internal ID is in attributes, not the entity_id suffix
+                auto_id = automation.get("attributes", {}).get("id")
+                if not auto_id:
+                    continue
 
-            # Get full config using the internal ID
-            config = await self.client.get_automation_config(auto_id)
-            if config:
-                result[auto_id] = config
+                # Get full config using the internal ID
+                config = await self.client.get_automation_config(auto_id)
+                if config:
+                    result[auto_id] = config
 
-        return result
+            logfire.info("Found {count} automations", count=len(result))
+            return result
 
     def get_local_entities(self) -> dict[str, dict[str, Any]]:
         """Get all local automation files."""
@@ -69,6 +72,7 @@ class AutomationSyncer(BaseSyncer):
 
         return result
 
+    @logfire.instrument("Pull automations")
     async def pull(self, sync_deletions: bool = False) -> SyncResult:
         """Pull automations from Home Assistant to local files."""
         result = SyncResult(created=[], updated=[], deleted=[], renamed=[], errors=[])
@@ -80,68 +84,70 @@ class AutomationSyncer(BaseSyncer):
         # Track used filenames to handle collisions
         used_filenames: set[str] = set()
 
-        for auto_id, config in remote.items():
-            alias = config.get("alias", "")
+        with logfire.span("Write local files"):
+            for auto_id, config in remote.items():
+                alias = config.get("alias", "")
 
-            # Ensure ID is in config
-            if "id" not in config:
-                config = {"id": auto_id, **config}
+                # Ensure ID is in config
+                if "id" not in config:
+                    config = {"id": auto_id, **config}
 
-            # Validate and order through Pydantic model
-            ordered = Automation.normalize(config)
+                # Validate and order through Pydantic model
+                ordered = Automation.normalize(config)
 
-            # Determine filename - use existing if updating, else create from alias
-            if auto_id in local and "_filename" in local[auto_id]:
-                filename = local[auto_id]["_filename"]
-            else:
-                filename = filename_from_name(alias, auto_id)
-                # Handle collisions by appending ID suffix
-                if filename in used_filenames:
-                    stem = filename.rsplit(".yaml", 1)[0]
-                    filename = f"{stem}-{auto_id}.yaml"
+                # Determine filename - use existing if updating, else create from alias
+                if auto_id in local and "_filename" in local[auto_id]:
+                    filename = local[auto_id]["_filename"]
+                else:
+                    filename = filename_from_name(alias, auto_id)
+                    # Handle collisions by appending ID suffix
+                    if filename in used_filenames:
+                        stem = filename.rsplit(".yaml", 1)[0]
+                        filename = f"{stem}-{auto_id}.yaml"
 
-            used_filenames.add(filename)
-            file_path = self.local_path / filename
-            rel_path = relative_path(file_path)
+                used_filenames.add(filename)
+                file_path = self.local_path / filename
+                rel_path = relative_path(file_path)
 
-            if auto_id in local:
-                # Check if content changed (exclude _filename metadata)
-                local_config = {
-                    k: v for k, v in local[auto_id].items() if not k.startswith("_")
-                }
-                local_normalized = Automation.normalize(local_config)
-                if ordered != local_normalized:
+                if auto_id in local:
+                    # Check if content changed (exclude _filename metadata)
+                    local_config = {
+                        k: v for k, v in local[auto_id].items() if not k.startswith("_")
+                    }
+                    local_normalized = Automation.normalize(local_config)
+                    if ordered != local_normalized:
+                        dump_yaml(ordered, file_path)
+                        result.updated.append(auto_id)
+                        console.print(f"  [yellow]Updated[/yellow] {rel_path}")
+                else:
                     dump_yaml(ordered, file_path)
-                    result.updated.append(auto_id)
-                    console.print(f"  [yellow]Updated[/yellow] {rel_path}")
-            else:
-                dump_yaml(ordered, file_path)
-                result.created.append(auto_id)
-                console.print(f"  [green]Created[/green] {rel_path}")
+                    result.created.append(auto_id)
+                    console.print(f"  [green]Created[/green] {rel_path}")
 
-        # Delete local files that don't exist in remote
-        if sync_deletions:
-            for auto_id, local_data in local.items():
-                if auto_id not in remote:
-                    filename = local_data.get("_filename")
-                    if filename:
-                        file_path = self.local_path / filename
-                        if file_path.exists():
-                            file_path.unlink()
-                            result.deleted.append(auto_id)
-                            rel_path = relative_path(file_path)
-                            console.print(f"  [red]Deleted[/red] {rel_path}")
-        else:
-            # Warn about local files without remote counterpart
-            orphaned = [aid for aid in local if aid not in remote]
-            if orphaned:
-                console.print(
-                    f"  [dim]{len(orphaned)} local file(s) not in HA "
-                    "(use --sync-deletions to remove)[/dim]"
-                )
+            # Delete local files that don't exist in remote
+            if sync_deletions:
+                for auto_id, local_data in local.items():
+                    if auto_id not in remote:
+                        filename = local_data.get("_filename")
+                        if filename:
+                            file_path = self.local_path / filename
+                            if file_path.exists():
+                                file_path.unlink()
+                                result.deleted.append(auto_id)
+                                rel_path = relative_path(file_path)
+                                console.print(f"  [red]Deleted[/red] {rel_path}")
+            else:
+                # Warn about local files without remote counterpart
+                orphaned = [aid for aid in local if aid not in remote]
+                if orphaned:
+                    console.print(
+                        f"  [dim]{len(orphaned)} local file(s) not in HA "
+                        "(use --sync-deletions to remove)[/dim]"
+                    )
 
         return result
 
+    @logfire.instrument("Push automations")
     async def push(
         self,
         force: bool = False,
@@ -159,9 +165,7 @@ class AutomationSyncer(BaseSyncer):
             # Build diff items for all local entities
             diff_items = []
             for auto_id, local_config in local.items():
-                local_clean = {
-                    k: v for k, v in local_config.items() if not k.startswith("_")
-                }
+                local_clean = {k: v for k, v in local_config.items() if not k.startswith("_")}
                 if auto_id in remote:
                     diff_items.append(
                         DiffItem(
@@ -192,84 +196,89 @@ class AutomationSyncer(BaseSyncer):
         files_to_rename: list[tuple[Path, Path]] = []
 
         # Process only changed items from diff
-        for item in diff_items:
-            auto_id = item.entity_id
+        with logfire.span("Save to remote"):
+            for item in diff_items:
+                auto_id = item.entity_id
 
-            if item.status == "added":
-                config = local.get(auto_id, {})
-                push_config = {k: v for k, v in config.items() if not k.startswith("_")}
-                alias = config.get("alias", "")
-                current_filename = config.get("_filename", "")
-                file_path = self.local_path / (current_filename or filename_from_name(alias, auto_id))
-                rel_path = relative_path(file_path)
+                if item.status == "added":
+                    config = local.get(auto_id, {})
+                    push_config = {k: v for k, v in config.items() if not k.startswith("_")}
+                    alias = config.get("alias", "")
+                    current_filename = config.get("_filename", "")
+                    file_path = self.local_path / (
+                        current_filename or filename_from_name(alias, auto_id)
+                    )
+                    rel_path = relative_path(file_path)
 
-                try:
-                    if dry_run:
-                        console.print(f"  [cyan]Would create[/cyan] {rel_path}")
-                        result.created.append(auto_id)
-                    else:
-                        await self.client.save_automation_config(auto_id, push_config)
-                        result.created.append(auto_id)
-                        console.print(f"  [green]Created[/green] {rel_path}")
+                    try:
+                        if dry_run:
+                            console.print(f"  [cyan]Would create[/cyan] {rel_path}")
+                            result.created.append(auto_id)
+                        else:
+                            await self.client.save_automation_config(auto_id, push_config)
+                            result.created.append(auto_id)
+                            console.print(f"  [green]Created[/green] {rel_path}")
 
-                    # Check if file should be renamed to match alias
-                    if current_filename and alias:
-                        expected_filename = filename_from_name(alias, auto_id)
-                        if current_filename != expected_filename:
-                            old_path = self.local_path / current_filename
-                            new_path = self.local_path / expected_filename
-                            if old_path.exists() and not new_path.exists():
-                                files_to_rename.append((old_path, new_path))
+                        # Check if file should be renamed to match alias
+                        if current_filename and alias:
+                            expected_filename = filename_from_name(alias, auto_id)
+                            if current_filename != expected_filename:
+                                old_path = self.local_path / current_filename
+                                new_path = self.local_path / expected_filename
+                                if old_path.exists() and not new_path.exists():
+                                    files_to_rename.append((old_path, new_path))
 
-                except Exception as e:
-                    result.errors.append((auto_id, str(e)))
-                    console.print(f"  [red]Error[/red] {rel_path}: {e}")
+                    except Exception as e:
+                        result.errors.append((auto_id, str(e)))
+                        console.print(f"  [red]Error[/red] {rel_path}: {e}")
 
-            elif item.status == "modified":
-                config = local.get(auto_id, {})
-                push_config = {k: v for k, v in config.items() if not k.startswith("_")}
-                alias = config.get("alias", "")
-                current_filename = config.get("_filename", "")
-                file_path = self.local_path / (current_filename or filename_from_name(alias, auto_id))
-                rel_path = relative_path(file_path)
+                elif item.status == "modified":
+                    config = local.get(auto_id, {})
+                    push_config = {k: v for k, v in config.items() if not k.startswith("_")}
+                    alias = config.get("alias", "")
+                    current_filename = config.get("_filename", "")
+                    file_path = self.local_path / (
+                        current_filename or filename_from_name(alias, auto_id)
+                    )
+                    rel_path = relative_path(file_path)
 
-                try:
-                    if dry_run:
-                        console.print(f"  [cyan]Would update[/cyan] {rel_path}")
-                        result.updated.append(auto_id)
-                    else:
-                        await self.client.save_automation_config(auto_id, push_config)
-                        result.updated.append(auto_id)
-                        console.print(f"  [yellow]Updated[/yellow] {rel_path}")
+                    try:
+                        if dry_run:
+                            console.print(f"  [cyan]Would update[/cyan] {rel_path}")
+                            result.updated.append(auto_id)
+                        else:
+                            await self.client.save_automation_config(auto_id, push_config)
+                            result.updated.append(auto_id)
+                            console.print(f"  [yellow]Updated[/yellow] {rel_path}")
 
-                    # Check if file should be renamed to match alias
-                    if current_filename and alias:
-                        expected_filename = filename_from_name(alias, auto_id)
-                        if current_filename != expected_filename:
-                            old_path = self.local_path / current_filename
-                            new_path = self.local_path / expected_filename
-                            if old_path.exists() and not new_path.exists():
-                                files_to_rename.append((old_path, new_path))
+                        # Check if file should be renamed to match alias
+                        if current_filename and alias:
+                            expected_filename = filename_from_name(alias, auto_id)
+                            if current_filename != expected_filename:
+                                old_path = self.local_path / current_filename
+                                new_path = self.local_path / expected_filename
+                                if old_path.exists() and not new_path.exists():
+                                    files_to_rename.append((old_path, new_path))
 
-                except Exception as e:
-                    result.errors.append((auto_id, str(e)))
-                    console.print(f"  [red]Error[/red] {rel_path}: {e}")
+                    except Exception as e:
+                        result.errors.append((auto_id, str(e)))
+                        console.print(f"  [red]Error[/red] {rel_path}: {e}")
 
-            elif item.status == "deleted" and sync_deletions:
-                alias = item.remote.get("alias", "") if item.remote else ""
-                file_path = self.local_path / filename_from_name(alias, auto_id)
-                rel_path = relative_path(file_path)
-                try:
-                    if dry_run:
-                        console.print(f"  [cyan]Would delete[/cyan] {rel_path}")
-                        result.deleted.append(auto_id)
-                    else:
-                        await self.client.delete_automation(auto_id)
-                        result.deleted.append(auto_id)
-                        console.print(f"  [red]Deleted[/red] {rel_path}")
-                except Exception as e:
-                    result.errors.append((auto_id, str(e)))
-                    console.print(f"  [red]Error deleting[/red] {rel_path}: {e}")
+                elif item.status == "deleted" and sync_deletions:
+                    alias = item.remote.get("alias", "") if item.remote else ""
+                    file_path = self.local_path / filename_from_name(alias, auto_id)
+                    rel_path = relative_path(file_path)
+                    try:
+                        if dry_run:
+                            console.print(f"  [cyan]Would delete[/cyan] {rel_path}")
+                            result.deleted.append(auto_id)
+                        else:
+                            await self.client.delete_automation(auto_id)
+                            result.deleted.append(auto_id)
+                            console.print(f"  [red]Deleted[/red] {rel_path}")
+                    except Exception as e:
+                        result.errors.append((auto_id, str(e)))
+                        console.print(f"  [red]Error deleting[/red] {rel_path}: {e}")
 
         # Reload automations if we made changes
         if not dry_run and result.has_changes:
@@ -308,6 +317,7 @@ class AutomationSyncer(BaseSyncer):
 
         return result
 
+    @logfire.instrument("Diff automations")
     async def diff(self) -> list[DiffItem]:
         """Compare local automations with remote."""
         items: list[DiffItem] = []

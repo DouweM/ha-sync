@@ -3,6 +3,8 @@
 from pathlib import Path
 from typing import Any
 
+import logfire
+
 from ha_sync.client import HAClient
 from ha_sync.config import SyncConfig
 from ha_sync.models import Script
@@ -23,6 +25,7 @@ class ScriptSyncer(SimpleEntitySyncer):
     def local_path(self) -> Path:
         return self.config.scripts_path
 
+    @logfire.instrument("Fetch remote scripts")
     async def get_remote_entities(self) -> dict[str, dict[str, Any]]:
         """Get all scripts from Home Assistant."""
         scripts = await self.client.get_scripts()

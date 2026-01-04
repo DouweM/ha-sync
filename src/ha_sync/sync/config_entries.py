@@ -9,6 +9,7 @@ import logging
 from pathlib import Path
 from typing import Any
 
+import logfire
 from rich.console import Console
 
 from ha_sync.client import HAClient
@@ -112,6 +113,7 @@ class ConfigEntrySyncer(BaseSyncer):
                 pass
         return result
 
+    @logfire.instrument("Fetch remote {self.domain} helpers")
     async def get_remote_entities(self) -> dict[str, dict[str, Any]]:
         """Get all helpers of this domain from Home Assistant."""
         result: dict[str, dict[str, Any]] = {}
@@ -143,9 +145,7 @@ class ConfigEntrySyncer(BaseSyncer):
 
         return result
 
-    def _get_filename(
-        self, name: str, entry_id: str, existing_filenames: set[str]
-    ) -> str:
+    def _get_filename(self, name: str, entry_id: str, existing_filenames: set[str]) -> str:
         """Get a unique filename for a helper, handling collisions."""
         filename = filename_from_name(name, entry_id)
         if filename not in existing_filenames:
@@ -155,6 +155,7 @@ class ConfigEntrySyncer(BaseSyncer):
         base = filename.rsplit(".yaml", 1)[0]
         return f"{base}-{entry_id}.yaml"
 
+    @logfire.instrument("Pull {self.domain} helpers")
     async def pull(self, sync_deletions: bool = False) -> SyncResult:
         """Pull helpers from Home Assistant to local files."""
         result = SyncResult(created=[], updated=[], deleted=[], renamed=[], errors=[])
@@ -198,9 +199,7 @@ class ConfigEntrySyncer(BaseSyncer):
                             result.renamed.append((entry_id, entry_id))
                             old_rel = relative_path(old_path)
                             new_rel = relative_path(new_path)
-                            console.print(
-                                f"  [blue]Renamed[/blue] {old_rel} -> {new_rel}"
-                            )
+                            console.print(f"  [blue]Renamed[/blue] {old_rel} -> {new_rel}")
                     elif ordered != local_normalized:
                         file_path = self.local_path / (current_filename or expected_filename)
                         dump_yaml(ordered, file_path)
@@ -244,6 +243,7 @@ class ConfigEntrySyncer(BaseSyncer):
 
         return result
 
+    @logfire.instrument("Push {self.domain} helpers")
     async def push(
         self,
         force: bool = False,
@@ -297,9 +297,7 @@ class ConfigEntrySyncer(BaseSyncer):
                         result.created.append(entry_id)
                         continue
 
-                    new_entry_id = await self.client.create_config_entry(
-                        self.domain, config
-                    )
+                    new_entry_id = await self.client.create_config_entry(self.domain, config)
                     result.created.append(entry_id)
                     console.print(f"  [green]Created[/green] {rel_path}")
 
@@ -327,9 +325,7 @@ class ConfigEntrySyncer(BaseSyncer):
             else:
                 # Normal mode: only items from diff
                 items_to_delete = [
-                    item.entity_id
-                    for item in diff_items
-                    if item.status == "deleted"
+                    item.entity_id for item in diff_items if item.status == "deleted"
                 ]
 
             for entry_id in items_to_delete:
@@ -358,6 +354,7 @@ class ConfigEntrySyncer(BaseSyncer):
 
         return result
 
+    @logfire.instrument("Diff {self.domain} helpers")
     async def diff(self) -> list[DiffItem]:
         """Compare local helpers with remote."""
         items: list[DiffItem] = []
@@ -370,9 +367,7 @@ class ConfigEntrySyncer(BaseSyncer):
             local_clean = {k: v for k, v in local_data.items() if k != "_filename"}
 
             if entry_id not in remote:
-                items.append(
-                    DiffItem(entity_id=entry_id, status="added", local=local_clean)
-                )
+                items.append(DiffItem(entity_id=entry_id, status="added", local=local_clean))
             else:
                 remote_data = remote[entry_id]
                 if "entry_id" not in remote_data:

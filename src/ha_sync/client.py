@@ -5,6 +5,7 @@ from typing import Any
 
 import aiohttp
 import httpx
+import logfire
 
 
 class AuthenticationFailed(Exception):
@@ -39,6 +40,7 @@ class HAClient:
         self._msg_id = 0
         self._ha_version: str | None = None
 
+    @logfire.instrument("Connecting to Home Assistant")
     async def connect(self) -> None:
         """Connect to Home Assistant via WebSocket."""
         ws_url = self.url.replace("http://", "ws://").replace("https://", "wss://")
@@ -53,6 +55,7 @@ class HAClient:
             if msg.get("type") != "auth_required":
                 raise ConnectionFailed(f"Unexpected message: {msg}")
             self._ha_version = msg.get("ha_version")
+            logfire.info("Connected to Home Assistant {ha_version}", ha_version=self._ha_version)
 
             # Send authentication
             await self._ws.send_json({"type": "auth", "access_token": self.token})
@@ -66,6 +69,7 @@ class HAClient:
 
         except aiohttp.ClientError as e:
             await self._cleanup_ws()
+            logfire.error("WebSocket connection failed: {error}", error=str(e))
             raise ConnectionFailed(str(e)) from e
 
     async def _cleanup_ws(self) -> None:
@@ -106,20 +110,29 @@ class HAClient:
         self._msg_id += 1
         msg_id = self._msg_id
 
-        await self._ws.send_json({"id": msg_id, "type": command_type, **kwargs})
+        with logfire.span(
+            "WebSocket: {command_type}", command_type=command_type, request=kwargs
+        ) as span:
+            await self._ws.send_json({"id": msg_id, "type": command_type, **kwargs})
 
-        # Wait for response with matching ID
-        while True:
-            response = await self._ws.receive_json()
-            if response.get("id") == msg_id:
-                if not response.get("success", True):
-                    error = response.get("error", {})
-                    code = error.get("code", "error")
-                    msg = error.get("message", "Unknown error")
-                    raise Exception(f"{code}: {msg}")
-                return response.get("result")
-            # Skip events and other messages
+            # Wait for response with matching ID
+            while True:
+                response = await self._ws.receive_json()
+                if response.get("id") == msg_id:
+                    if not response.get("success", True):
+                        error = response.get("error", {})
+                        code = error.get("code", "error")
+                        msg = error.get("message", "Unknown error")
+                        logfire.warning(
+                            "WebSocket command failed: {code}: {msg}", code=code, msg=msg
+                        )
+                        raise Exception(f"{code}: {msg}")
+                    result = response.get("result")
+                    span.set_attribute("response", result)
+                    return result
+                # Skip events and other messages
 
+    @logfire.instrument("Call service: {domain}.{service}")
     async def call_service(
         self,
         domain: str,
@@ -205,6 +218,7 @@ class HAClient:
 
     # --- Automation Commands ---
 
+    @logfire.instrument("Get automations")
     async def get_automations(self) -> list[dict[str, Any]]:
         """Get all automations via REST API."""
         response = await self.http.get("/api/states")
@@ -212,6 +226,7 @@ class HAClient:
         states = response.json()
         return [s for s in states if s["entity_id"].startswith("automation.")]
 
+    @logfire.instrument("Get automation config: {automation_id}")
     async def get_automation_config(self, automation_id: str) -> dict[str, Any]:
         """Get automation configuration."""
         response = await self.http.get(f"/api/config/automation/config/{automation_id}")
@@ -220,6 +235,7 @@ class HAClient:
         response.raise_for_status()
         return response.json()
 
+    @logfire.instrument("Save automation config: {automation_id}")
     async def save_automation_config(self, automation_id: str, config: dict[str, Any]) -> None:
         """Save automation configuration."""
         response = await self.http.post(
@@ -228,6 +244,7 @@ class HAClient:
         )
         response.raise_for_status()
 
+    @logfire.instrument("Delete automation: {automation_id}")
     async def delete_automation(self, automation_id: str) -> None:
         """Delete an automation."""
         response = await self.http.delete(f"/api/config/automation/config/{automation_id}")
@@ -239,6 +256,7 @@ class HAClient:
 
     # --- Script Commands ---
 
+    @logfire.instrument("Get scripts")
     async def get_scripts(self) -> list[dict[str, Any]]:
         """Get all scripts via states."""
         response = await self.http.get("/api/states")
@@ -246,6 +264,7 @@ class HAClient:
         states = response.json()
         return [s for s in states if s["entity_id"].startswith("script.")]
 
+    @logfire.instrument("Get script config: {script_id}")
     async def get_script_config(self, script_id: str) -> dict[str, Any]:
         """Get script configuration."""
         response = await self.http.get(f"/api/config/script/config/{script_id}")
@@ -254,6 +273,7 @@ class HAClient:
         response.raise_for_status()
         return response.json()
 
+    @logfire.instrument("Save script config: {script_id}")
     async def save_script_config(self, script_id: str, config: dict[str, Any]) -> None:
         """Save script configuration."""
         response = await self.http.post(
@@ -262,6 +282,7 @@ class HAClient:
         )
         response.raise_for_status()
 
+    @logfire.instrument("Delete script: {script_id}")
     async def delete_script(self, script_id: str) -> None:
         """Delete a script."""
         response = await self.http.delete(f"/api/config/script/config/{script_id}")
@@ -273,6 +294,7 @@ class HAClient:
 
     # --- Scene Commands ---
 
+    @logfire.instrument("Get scenes")
     async def get_scenes(self) -> list[dict[str, Any]]:
         """Get all scenes via states."""
         response = await self.http.get("/api/states")
@@ -280,6 +302,7 @@ class HAClient:
         states = response.json()
         return [s for s in states if s["entity_id"].startswith("scene.")]
 
+    @logfire.instrument("Get scene config: {scene_id}")
     async def get_scene_config(self, scene_id: str) -> dict[str, Any]:
         """Get scene configuration."""
         response = await self.http.get(f"/api/config/scene/config/{scene_id}")
@@ -288,6 +311,7 @@ class HAClient:
         response.raise_for_status()
         return response.json()
 
+    @logfire.instrument("Save scene config: {scene_id}")
     async def save_scene_config(self, scene_id: str, config: dict[str, Any]) -> None:
         """Save scene configuration."""
         response = await self.http.post(
@@ -296,6 +320,7 @@ class HAClient:
         )
         response.raise_for_status()
 
+    @logfire.instrument("Delete scene: {scene_id}")
     async def delete_scene(self, scene_id: str) -> None:
         """Delete a scene."""
         response = await self.http.delete(f"/api/config/scene/config/{scene_id}")
@@ -464,6 +489,7 @@ class HAClient:
 
     # --- Config Entry-based Helpers (template, group) ---
 
+    @logfire.instrument("Get config entries: {domain}")
     async def get_config_entries(self, domain: str | None = None) -> list[dict[str, Any]]:
         """Get all config entries, optionally filtered by domain."""
         entries = await self.send_command("config_entries/get")
@@ -471,6 +497,7 @@ class HAClient:
             entries = [e for e in entries if e.get("domain") == domain]
         return entries if isinstance(entries, list) else []
 
+    @logfire.instrument("Get config entry options: {entry_id}")
     async def get_config_entry_options(self, entry_id: str) -> dict[str, Any]:
         """Get config entry options by creating and aborting an options flow.
 
@@ -513,11 +540,13 @@ class HAClient:
             **config,
         }
 
+    @logfire.instrument("Delete config entry: {entry_id}")
     async def delete_config_entry(self, entry_id: str) -> None:
         """Delete a config entry."""
         response = await self.http.delete(f"/api/config/config_entries/entry/{entry_id}")
         response.raise_for_status()
 
+    @logfire.instrument("Create config entry: {domain}")
     async def create_config_entry(
         self,
         domain: str,
@@ -569,10 +598,14 @@ class HAClient:
             result = response.json()
 
             if result.get("type") == "create_entry":
-                return result["result"]["entry_id"]
+                entry_id = result["result"]["entry_id"]
+                logfire.info("Created config entry {entry_id}", entry_id=entry_id)
+                return entry_id
             elif result.get("errors"):
+                logfire.warning("Config flow errors: {errors}", errors=result["errors"])
                 raise ValueError(f"Config flow errors: {result['errors']}")
             else:
+                logfire.warning("Unexpected flow result: {result}", result=result)
                 raise ValueError(f"Unexpected flow result: {result}")
 
         except Exception:
@@ -581,6 +614,7 @@ class HAClient:
                 await self.http.delete(f"/api/config/config_entries/flow/{flow_id}")
             raise
 
+    @logfire.instrument("Update config entry: {entry_id}")
     async def update_config_entry(self, entry_id: str, config: dict[str, Any]) -> None:
         """Update a config entry via options flow.
 
@@ -615,14 +649,13 @@ class HAClient:
             result = response.json()
 
             if result.get("errors"):
+                logfire.warning("Options flow errors: {errors}", errors=result["errors"])
                 raise ValueError(f"Options flow errors: {result['errors']}")
 
         except Exception:
             # Clean up the flow on error
             with contextlib.suppress(Exception):
-                await self.http.delete(
-                    f"/api/config/config_entries/options/flow/{flow_id}"
-                )
+                await self.http.delete(f"/api/config/config_entries/options/flow/{flow_id}")
             raise
 
     # Template Helpers
@@ -640,9 +673,7 @@ class HAClient:
                 pass
         return result
 
-    async def create_template_helper(
-        self, entity_type: str, config: dict[str, Any]
-    ) -> str:
+    async def create_template_helper(self, entity_type: str, config: dict[str, Any]) -> str:
         """Create a template helper.
 
         Args:
@@ -677,9 +708,7 @@ class HAClient:
                 pass
         return result
 
-    async def create_group_helper(
-        self, entity_type: str, config: dict[str, Any]
-    ) -> str:
+    async def create_group_helper(self, entity_type: str, config: dict[str, Any]) -> str:
         """Create a group helper.
 
         Args:
@@ -743,9 +772,7 @@ class HAClient:
         """Create a utility meter helper."""
         return await self.create_config_entry("utility_meter", config)
 
-    async def update_utility_meter_helper(
-        self, entry_id: str, config: dict[str, Any]
-    ) -> None:
+    async def update_utility_meter_helper(self, entry_id: str, config: dict[str, Any]) -> None:
         """Update a utility meter helper."""
         await self.update_config_entry(entry_id, config)
 
@@ -807,18 +834,21 @@ class HAClient:
 
     # --- Utility Methods ---
 
+    @logfire.instrument("Check HA config")
     async def check_config(self) -> dict[str, Any]:
         """Check Home Assistant configuration validity."""
         response = await self.http.post("/api/config/core/check_config")
         response.raise_for_status()
         return response.json()
 
+    @logfire.instrument("Get HA config")
     async def get_config(self) -> dict[str, Any]:
         """Get Home Assistant configuration."""
         response = await self.http.get("/api/config")
         response.raise_for_status()
         return response.json()
 
+    @logfire.instrument("Render template")
     async def render_template(self, template: str) -> str:
         """Render a Jinja2 template using Home Assistant."""
         response = await self.http.post(
@@ -828,6 +858,7 @@ class HAClient:
         response.raise_for_status()
         return response.text
 
+    @logfire.instrument("Validate template")
     async def validate_template(self, template: str) -> tuple[bool, str]:
         """Validate a Jinja2 template."""
         try:

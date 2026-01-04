@@ -5,6 +5,7 @@ from enum import Enum
 from pathlib import Path
 from typing import Annotated
 
+import logfire
 import typer
 from rich.console import Console
 from rich.table import Table
@@ -27,6 +28,10 @@ from ha_sync.sync.config_entries import (
     ConfigEntrySyncer,
     discover_helper_domains,
 )
+
+# Configure logfire (must be after imports to ensure proper instrumentation)
+logfire.configure(service_name="ha-sync", send_to_logfire="if-token-present", console=False)
+logfire.instrument_httpx(capture_all=True)
 
 app = typer.Typer(
     name="ha-sync",
@@ -124,54 +129,58 @@ async def get_syncers_with_discovery(
 @app.command()
 def init() -> None:
     """Initialize ha-sync directory structure and check configuration."""
-    config = get_config()
+    with logfire.span("ha-sync init"):
+        config = get_config()
 
-    # Create directory structure
-    config.ensure_dirs()
-    console.print("[green]Created[/green] directory structure (dashboards/, automations/, etc.)")
+        # Create directory structure
+        config.ensure_dirs()
+        console.print(
+            "[green]Created[/green] directory structure (dashboards/, automations/, etc.)"
+        )
 
-    # Check .env configuration
-    if config.url:
-        console.print(f"[green]HA_URL found in .env:[/green] {config.url}")
-    else:
-        console.print("[yellow]HA_URL not set in .env[/yellow]")
+        # Check .env configuration
+        if config.url:
+            console.print(f"[green]HA_URL found in .env:[/green] {config.url}")
+        else:
+            console.print("[yellow]HA_URL not set in .env[/yellow]")
 
-    if config.token:
-        console.print("[green]HA_TOKEN found in .env[/green]")
-    else:
-        console.print("[yellow]HA_TOKEN not set in .env[/yellow]")
+        if config.token:
+            console.print("[green]HA_TOKEN found in .env[/green]")
+        else:
+            console.print("[yellow]HA_TOKEN not set in .env[/yellow]")
 
-    if not config.url or not config.token:
-        console.print()
-        console.print("[dim]Add HA_URL and HA_TOKEN to a .env file in this directory[/dim]")
+        if not config.url or not config.token:
+            console.print()
+            console.print("[dim]Add HA_URL and HA_TOKEN to a .env file in this directory[/dim]")
 
 
 @app.command()
 def status() -> None:
     """Show connection status and sync state."""
-    config = get_config()
+    with logfire.span("ha-sync status"):
+        config = get_config()
 
-    table = Table(title="Configuration")
-    table.add_column("Setting", style="cyan")
-    table.add_column("Value")
+        table = Table(title="Configuration")
+        table.add_column("Setting", style="cyan")
+        table.add_column("Value")
 
-    table.add_row("HA URL", config.url or "[red]Not set[/red]")
-    table.add_row("HA Token", "[green]Set[/green]" if config.token else "[red]Not set[/red]")
+        table.add_row("HA URL", config.url or "[red]Not set[/red]")
+        table.add_row("HA Token", "[green]Set[/green]" if config.token else "[red]Not set[/red]")
 
-    console.print(table)
+        console.print(table)
 
-    # Try to connect
-    if config.url and config.token:
-        console.print()
-        console.print("[dim]Testing connection...[/dim]")
-        try:
-            asyncio.run(_test_connection(config))
-            console.print("[green]Connected successfully[/green]")
-        except Exception as e:
-            console.print(f"[red]Connection failed:[/red] {e}")
-    else:
-        console.print()
-        console.print("[dim]Set HA_URL and HA_TOKEN in .env to enable connection[/dim]")
+        # Try to connect
+        if config.url and config.token:
+            console.print()
+            console.print("[dim]Testing connection...[/dim]")
+            try:
+                asyncio.run(_test_connection(config))
+                console.print("[green]Connected successfully[/green]")
+            except Exception as e:
+                console.print(f"[red]Connection failed:[/red] {e}")
+        else:
+            console.print()
+            console.print("[dim]Set HA_URL and HA_TOKEN in .env to enable connection[/dim]")
 
 
 async def _test_connection(config: SyncConfig) -> None:
@@ -204,6 +213,17 @@ def validate(
     ] = True,
 ) -> None:
     """Validate local YAML files for errors."""
+    with logfire.span("ha-sync validate {entity_type}", entity_type=entity_type.value):
+        _validate_impl(entity_type, check_templates, check_config, diff_only)
+
+
+def _validate_impl(
+    entity_type: EntityType,
+    check_templates: bool,
+    check_config: bool,
+    diff_only: bool,
+) -> None:
+    """Implementation of validate command."""
     import re
 
     from ha_sync.utils import load_yaml
@@ -376,7 +396,8 @@ def validate(
             # Filter to only changed files if diff_only mode
             if diff_only and changed_files:
                 filtered = [
-                    t for t in templates_to_check
+                    t
+                    for t in templates_to_check
                     if any(entity_id in t[0] for entity_id in changed_files)
                 ]
                 if not filtered:
@@ -481,12 +502,13 @@ def pull(
     ] = False,
 ) -> None:
     """Pull entities from Home Assistant to local files."""
-    config = get_config()
-    if not config.url or not config.token:
-        console.print("[red]Missing HA_URL or HA_TOKEN.[/red] Set them in .env file.")
-        raise typer.Exit(1)
+    with logfire.span("ha-sync pull {entity_type}", entity_type=entity_type.value):
+        config = get_config()
+        if not config.url or not config.token:
+            console.print("[red]Missing HA_URL or HA_TOKEN.[/red] Set them in .env file.")
+            raise typer.Exit(1)
 
-    asyncio.run(_pull(config, entity_type, sync_deletions))
+        asyncio.run(_pull(config, entity_type, sync_deletions))
 
 
 async def _pull(config: SyncConfig, entity_type: EntityType, sync_deletions: bool) -> None:
@@ -527,15 +549,18 @@ def push(
     ] = False,
 ) -> None:
     """Push local files to Home Assistant."""
-    config = get_config()
-    if not config.url or not config.token:
-        console.print("[red]Missing HA_URL or HA_TOKEN.[/red] Set them in .env file.")
-        raise typer.Exit(1)
+    with logfire.span(
+        "ha-sync push {entity_type}", entity_type=entity_type.value, force=force, dry_run=dry_run
+    ):
+        config = get_config()
+        if not config.url or not config.token:
+            console.print("[red]Missing HA_URL or HA_TOKEN.[/red] Set them in .env file.")
+            raise typer.Exit(1)
 
-    if dry_run:
-        console.print("[cyan]Dry run mode - no changes will be made[/cyan]")
+        if dry_run:
+            console.print("[cyan]Dry run mode - no changes will be made[/cyan]")
 
-    asyncio.run(_push(config, entity_type, force, sync_deletions, dry_run))
+        asyncio.run(_push(config, entity_type, force, sync_deletions, dry_run))
 
 
 async def _push(
@@ -575,12 +600,13 @@ def diff(
     ] = EntityType.ALL,
 ) -> None:
     """Show differences between local and remote."""
-    config = get_config()
-    if not config.url or not config.token:
-        console.print("[red]Missing HA_URL or HA_TOKEN.[/red] Set them in .env file.")
-        raise typer.Exit(1)
+    with logfire.span("ha-sync diff {entity_type}", entity_type=entity_type.value):
+        config = get_config()
+        if not config.url or not config.token:
+            console.print("[red]Missing HA_URL or HA_TOKEN.[/red] Set them in .env file.")
+            raise typer.Exit(1)
 
-    asyncio.run(_diff(config, entity_type))
+        asyncio.run(_diff(config, entity_type))
 
 
 async def _diff(config: SyncConfig, entity_type: EntityType) -> None:
@@ -629,13 +655,15 @@ async def _diff(config: SyncConfig, entity_type: EntityType) -> None:
                 local_yaml = dump_yaml(item.local).splitlines(keepends=True)
                 remote_yaml = dump_yaml(item.remote).splitlines(keepends=True)
 
-                diff_lines = list(difflib.unified_diff(
-                    remote_yaml,
-                    local_yaml,
-                    fromfile="remote",
-                    tofile="local",
-                    lineterm="",
-                ))
+                diff_lines = list(
+                    difflib.unified_diff(
+                        remote_yaml,
+                        local_yaml,
+                        fromfile="remote",
+                        tofile="local",
+                        lineterm="",
+                    )
+                )
 
                 if diff_lines:
                     for line in diff_lines:
@@ -674,18 +702,19 @@ def watch(
     ] = EntityType.ALL,
 ) -> None:
     """Watch local files and push changes automatically."""
-    config = get_config()
-    if not config.url or not config.token:
-        console.print("[red]Missing HA_URL or HA_TOKEN.[/red] Set them in .env file.")
-        raise typer.Exit(1)
+    with logfire.span("ha-sync watch {entity_type}", entity_type=entity_type.value):
+        config = get_config()
+        if not config.url or not config.token:
+            console.print("[red]Missing HA_URL or HA_TOKEN.[/red] Set them in .env file.")
+            raise typer.Exit(1)
 
-    console.print("[dim]Watching current directory for changes...[/dim]")
-    console.print("[dim]Press Ctrl+C to stop[/dim]")
+        console.print("[dim]Watching current directory for changes...[/dim]")
+        console.print("[dim]Press Ctrl+C to stop[/dim]")
 
-    try:
-        asyncio.run(_watch(config, entity_type))
-    except KeyboardInterrupt:
-        console.print("\n[dim]Stopped watching[/dim]")
+        try:
+            asyncio.run(_watch(config, entity_type))
+        except KeyboardInterrupt:
+            console.print("\n[dim]Stopped watching[/dim]")
 
 
 async def _watch(config: SyncConfig, entity_type: EntityType) -> None:

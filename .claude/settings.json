@@ -20,7 +20,10 @@
       "Bash(uv sync:*)",
       "Bash(ls:*)",
       "Bash(grep:*)",
-      "WebFetch(domain:www.home-assistant.io)"
+      "WebFetch(domain:www.home-assistant.io)",
+      "WebFetch(domain:raw.githubusercontent.com)",
+      "Bash(wc:*)",
+      "WebFetch(domain:logfire.pydantic.dev)"
     ]
   }
 }

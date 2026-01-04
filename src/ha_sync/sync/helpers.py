@@ -3,6 +3,7 @@
 from pathlib import Path
 from typing import Any
 
+import logfire
 from rich.console import Console
 
 from ha_sync.client import HAClient
@@ -70,6 +71,7 @@ class HelperSyncer(BaseSyncer):
         if method:
             await method(helper_id)
 
+    @logfire.instrument("Fetch remote helpers")
     async def get_remote_entities(self) -> dict[str, dict[str, Any]]:
         """Get all helpers from Home Assistant."""
         result: dict[str, dict[str, Any]] = {}
@@ -106,6 +108,7 @@ class HelperSyncer(BaseSyncer):
 
         return result
 
+    @logfire.instrument("Pull helpers")
     async def pull(self, sync_deletions: bool = False) -> SyncResult:
         """Pull helpers from Home Assistant to local files."""
         result = SyncResult(created=[], updated=[], deleted=[], renamed=[], errors=[])
@@ -182,6 +185,7 @@ class HelperSyncer(BaseSyncer):
 
         return result
 
+    @logfire.instrument("Push helpers")
     async def push(
         self,
         force: bool = False,
@@ -246,9 +250,7 @@ class HelperSyncer(BaseSyncer):
         if force:
             # Force mode: all local items not already processed
             items_to_process = [
-                (full_id, local[full_id])
-                for full_id in local
-                if full_id not in processed_ids
+                (full_id, local[full_id]) for full_id in local if full_id not in processed_ids
             ]
         else:
             # Normal mode: only items from diff (added or modified)
@@ -293,15 +295,14 @@ class HelperSyncer(BaseSyncer):
             if force:
                 # Force mode: delete all remote items not in local
                 items_to_delete = [
-                    full_id for full_id in remote
+                    full_id
+                    for full_id in remote
                     if full_id not in local and full_id not in processed_ids
                 ]
             else:
                 # Normal mode: only items from diff
                 items_to_delete = [
-                    item.entity_id
-                    for item in diff_items
-                    if item.status == "deleted"
+                    item.entity_id for item in diff_items if item.status == "deleted"
                 ]
 
             for full_id in items_to_delete:
@@ -341,6 +342,7 @@ class HelperSyncer(BaseSyncer):
 
         return result
 
+    @logfire.instrument("Diff helpers")
     async def diff(self) -> list[DiffItem]:
         """Compare local helpers with remote."""
         items: list[DiffItem] = []

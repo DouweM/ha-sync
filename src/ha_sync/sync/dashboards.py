@@ -3,6 +3,7 @@
 from pathlib import Path
 from typing import Any
 
+import logfire
 from rich.console import Console
 
 from ha_sync.client import HAClient
@@ -29,7 +30,7 @@ def dir_name_from_url_path(url_path: str | None) -> str:
         return "lovelace"
     # Strip common prefix for cleaner names
     if url_path.startswith(DASHBOARD_PREFIX):
-        return url_path[len(DASHBOARD_PREFIX):]
+        return url_path[len(DASHBOARD_PREFIX) :]
     return url_path
 
 
@@ -56,6 +57,7 @@ class DashboardSyncer(BaseSyncer):
     def local_path(self) -> Path:
         return self.config.dashboards_path
 
+    @logfire.instrument("Fetch remote dashboards")
     async def get_remote_entities(self) -> dict[str, dict[str, Any]]:
         """Get all dashboards from Home Assistant.
 
@@ -252,14 +254,13 @@ class DashboardSyncer(BaseSyncer):
             # Build views list, removing position field (not part of HA config)
             views: list[dict[str, Any]] = []
             for view_data, _ in views_with_files:
-                view_without_position = {
-                    k: v for k, v in view_data.items() if k != "position"
-                }
+                view_without_position = {k: v for k, v in view_data.items() if k != "position"}
                 views.append(view_without_position)
             config["views"] = views
 
         return config
 
+    @logfire.instrument("Pull dashboards")
     async def pull(self, sync_deletions: bool = False) -> SyncResult:
         """Pull dashboards from Home Assistant to local files."""
         result = SyncResult(created=[], updated=[], deleted=[], renamed=[], errors=[])
@@ -324,6 +325,7 @@ class DashboardSyncer(BaseSyncer):
 
         return result
 
+    @logfire.instrument("Push dashboards")
     async def push(
         self,
         force: bool = False,
@@ -382,7 +384,9 @@ class DashboardSyncer(BaseSyncer):
                 await self.client.delete_dashboard(old_url_path)
 
                 result.renamed.append((old_url_path, new_url_path))
-                console.print(f"  [blue]Renamed[/blue] {rel_meta_path} ({old_url_path} -> {new_url_path})")
+                console.print(
+                    f"  [blue]Renamed[/blue] {rel_meta_path} ({old_url_path} -> {new_url_path})"
+                )
 
             except Exception as e:
                 result.errors.append((dir_name, str(e)))
@@ -392,9 +396,7 @@ class DashboardSyncer(BaseSyncer):
         if force:
             # Force mode: all local items not already processed
             items_to_process = [
-                (dir_name, local[dir_name])
-                for dir_name in local
-                if dir_name not in processed_dirs
+                (dir_name, local[dir_name]) for dir_name in local if dir_name not in processed_dirs
             ]
         else:
             # Normal mode: only items from diff (added or modified)
@@ -475,15 +477,14 @@ class DashboardSyncer(BaseSyncer):
             if force:
                 # Force mode: delete all remote items not in local
                 items_to_delete = [
-                    dir_name for dir_name in remote
+                    dir_name
+                    for dir_name in remote
                     if dir_name not in local and dir_name not in processed_dirs
                 ]
             else:
                 # Normal mode: only items from diff
                 items_to_delete = [
-                    item.entity_id
-                    for item in diff_items
-                    if item.status == "deleted"
+                    item.entity_id for item in diff_items if item.status == "deleted"
                 ]
 
             for dir_name in items_to_delete:
@@ -583,9 +584,7 @@ class DashboardSyncer(BaseSyncer):
 
                     old_rel = relative_path(old_file)
                     new_rel = relative_path(new_file)
-                    console.print(
-                        f"  [blue]Renamed view[/blue] {old_rel} -> {new_rel}"
-                    )
+                    console.print(f"  [blue]Renamed view[/blue] {old_rel} -> {new_rel}")
 
     def _print_views(self, dashboard_dir: Path, color: str, action: str) -> None:
         """Print view files under a dashboard."""
@@ -621,6 +620,7 @@ class DashboardSyncer(BaseSyncer):
 
         return result
 
+    @logfire.instrument("Diff dashboards")
     async def diff(self) -> list[DiffItem]:
         """Compare local dashboards with remote."""
         items: list[DiffItem] = []

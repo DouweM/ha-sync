@@ -3,6 +3,8 @@
 from pathlib import Path
 from typing import Any
 
+import logfire
+
 from ha_sync.client import HAClient
 from ha_sync.config import SyncConfig
 from ha_sync.models import Scene
@@ -23,6 +25,7 @@ class SceneSyncer(SimpleEntitySyncer):
     def local_path(self) -> Path:
         return self.config.scenes_path
 
+    @logfire.instrument("Fetch remote scenes")
     async def get_remote_entities(self) -> dict[str, dict[str, Any]]:
         """Get all scenes from Home Assistant."""
         scenes = await self.client.get_scenes()

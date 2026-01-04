@@ -4,6 +4,7 @@ import logging
 from pathlib import Path
 from typing import Any
 
+import logfire
 from rich.console import Console
 
 from ha_sync.client import HAClient
@@ -45,6 +46,7 @@ class GroupSyncer(BaseSyncer):
         """Get the Pydantic model for a subtype."""
         return GROUP_HELPER_MODELS.get(subtype)
 
+    @logfire.instrument("Fetch remote groups")
     async def get_remote_entities(self) -> dict[str, dict[str, Any]]:
         """Get all group helpers from Home Assistant."""
         result: dict[str, dict[str, Any]] = {}
@@ -62,9 +64,7 @@ class GroupSyncer(BaseSyncer):
                         "Home Assistant may have added a new type. "
                         "Please report this at https://github.com/DouweM/ha-sync/issues"
                     )
-                    console.print(
-                        f"  [yellow]Warning:[/yellow] Unknown group type '{step_id}'"
-                    )
+                    console.print(f"  [yellow]Warning:[/yellow] Unknown group type '{step_id}'")
 
                 result[f"{step_id}/{entry_id}"] = {
                     "subtype": step_id,
@@ -73,9 +73,7 @@ class GroupSyncer(BaseSyncer):
 
         return result
 
-    def _get_filename(
-        self, name: str, entry_id: str, existing_filenames: set[str]
-    ) -> str:
+    def _get_filename(self, name: str, entry_id: str, existing_filenames: set[str]) -> str:
         """Get a unique filename for a helper, handling collisions."""
         filename = filename_from_name(name, entry_id)
         if filename not in existing_filenames:
@@ -112,6 +110,7 @@ class GroupSyncer(BaseSyncer):
 
         return result
 
+    @logfire.instrument("Pull groups")
     async def pull(self, sync_deletions: bool = False) -> SyncResult:
         """Pull group helpers from Home Assistant to local files."""
         result = SyncResult(created=[], updated=[], deleted=[], renamed=[], errors=[])
@@ -159,16 +158,12 @@ class GroupSyncer(BaseSyncer):
                     # Existing entry - check if name changed (needs rename)
                     local_data = local[full_id]
                     current_filename = local_data.get("_filename")
-                    expected_filename = self._get_filename(
-                        name, entry_id, used_filenames[subtype]
-                    )
+                    expected_filename = self._get_filename(name, entry_id, used_filenames[subtype])
                     used_filenames[subtype].add(expected_filename)
 
                     # Remove metadata from comparison
                     local_config = {
-                        k: v
-                        for k, v in local_data.items()
-                        if k not in ("subtype", "_filename")
+                        k: v for k, v in local_data.items() if k not in ("subtype", "_filename")
                     }
                     if model_class:
                         try:
@@ -188,9 +183,7 @@ class GroupSyncer(BaseSyncer):
                             result.renamed.append((full_id, full_id))
                             old_rel = relative_path(old_path)
                             new_rel = relative_path(new_path)
-                            console.print(
-                                f"  [blue]Renamed[/blue] {old_rel} -> {new_rel}"
-                            )
+                            console.print(f"  [blue]Renamed[/blue] {old_rel} -> {new_rel}")
                     elif ordered != local_normalized:
                         file_path = subtype_path / (current_filename or expected_filename)
                         dump_yaml(ordered, file_path)
@@ -237,6 +230,7 @@ class GroupSyncer(BaseSyncer):
 
         return result
 
+    @logfire.instrument("Push groups")
     async def push(
         self,
         force: bool = False,
@@ -272,7 +266,9 @@ class GroupSyncer(BaseSyncer):
             current_filename = data.get("_filename")
             # Remove metadata before sending to HA
             config = {k: v for k, v in data.items() if k not in ("subtype", "_filename")}
-            file_path = self._subtype_path(subtype) / (current_filename or filename_from_name(name, entry_id or "new"))
+            file_path = self._subtype_path(subtype) / (
+                current_filename or filename_from_name(name, entry_id or "new")
+            )
             rel_path = relative_path(file_path)
 
             is_update = full_id in remote and entry_id is not None
@@ -324,9 +320,7 @@ class GroupSyncer(BaseSyncer):
             else:
                 # Normal mode: only items from diff
                 items_to_delete = [
-                    item.entity_id
-                    for item in diff_items
-                    if item.status == "deleted"
+                    item.entity_id for item in diff_items if item.status == "deleted"
                 ]
 
             for full_id in items_to_delete:
@@ -359,6 +353,7 @@ class GroupSyncer(BaseSyncer):
 
         return result
 
+    @logfire.instrument("Diff groups")
     async def diff(self) -> list[DiffItem]:
         """Compare local group helpers with remote."""
         items: list[DiffItem] = []
