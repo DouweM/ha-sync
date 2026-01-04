@@ -554,11 +554,11 @@ class HAClient:
                 flow_data = response.json()
 
             # Submit the form data
-            # Filter out internal fields
+            # Filter out internal fields (but keep "name" - it's required for creation)
             form_data = {
                 k: v
                 for k, v in config.items()
-                if k not in ("entry_id", "step_id", "name") and v is not None
+                if k not in ("entry_id", "step_id") and v is not None
             }
 
             response = await self.http.post(
@@ -598,7 +598,8 @@ class HAClient:
         flow_id = flow_data["flow_id"]
 
         try:
-            # Filter out internal fields and prepare form data
+            # Filter out internal fields (name is excluded because options flows
+            # don't handle name changes - name is set during creation as entry title)
             form_data = {
                 k: v
                 for k, v in config.items()
