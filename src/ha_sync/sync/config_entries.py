@@ -5,6 +5,7 @@ that don't have explicit model definitions. It auto-discovers helpers
 by domain and syncs them to/from local files.
 """
 
+import logging
 from pathlib import Path
 from typing import Any
 
@@ -24,9 +25,14 @@ from ha_sync.utils import dump_yaml, filename_from_name, load_yaml
 from .base import BaseSyncer, DiffItem, SyncResult
 
 console = Console()
+logger = logging.getLogger(__name__)
 
-# Known helper domains that use config entries (not YAML-only)
+# Track warned domains to avoid repeated warnings
+_warned_config_entry_domains: set[str] = set()
+
+# Known helper domains that use config entries (not YAML/WebSocket-based)
 # These are domains that can be created via Settings > Helpers in HA UI
+# Note: counter, timer, schedule use WebSocket API like input_*, not config entries
 CONFIG_ENTRY_HELPER_DOMAINS = {
     # Implemented with specific models
     "integration",
@@ -34,7 +40,6 @@ CONFIG_ENTRY_HELPER_DOMAINS = {
     "threshold",
     "tod",
     # Additional helper domains (will use generic handling)
-    "counter",
     "derivative",
     "min_max",
     "filter",
@@ -45,6 +50,7 @@ CONFIG_ENTRY_HELPER_DOMAINS = {
     "trend",
     "random",
     "statistics",
+    "mold_indicator",
 }
 
 # Models for known helper types (for proper field ordering)

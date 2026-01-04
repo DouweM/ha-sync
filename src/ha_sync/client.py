@@ -394,6 +394,58 @@ class HAClient:
     async def delete_input_datetime(self, helper_id: str) -> None:
         await self._delete_helper("input_datetime", helper_id)
 
+    # Input Button
+    async def get_input_buttons(self) -> list[dict[str, Any]]:
+        return await self._get_helpers("input_button")
+
+    async def create_input_button(self, config: dict[str, Any]) -> None:
+        await self._create_helper("input_button", config)
+
+    async def update_input_button(self, helper_id: str, config: dict[str, Any]) -> None:
+        await self._update_helper("input_button", helper_id, config)
+
+    async def delete_input_button(self, helper_id: str) -> None:
+        await self._delete_helper("input_button", helper_id)
+
+    # Timer
+    async def get_timers(self) -> list[dict[str, Any]]:
+        return await self._get_helpers("timer")
+
+    async def create_timer(self, config: dict[str, Any]) -> None:
+        await self._create_helper("timer", config)
+
+    async def update_timer(self, helper_id: str, config: dict[str, Any]) -> None:
+        await self._update_helper("timer", helper_id, config)
+
+    async def delete_timer(self, helper_id: str) -> None:
+        await self._delete_helper("timer", helper_id)
+
+    # Schedule
+    async def get_schedules(self) -> list[dict[str, Any]]:
+        return await self._get_helpers("schedule")
+
+    async def create_schedule(self, config: dict[str, Any]) -> None:
+        await self._create_helper("schedule", config)
+
+    async def update_schedule(self, helper_id: str, config: dict[str, Any]) -> None:
+        await self._update_helper("schedule", helper_id, config)
+
+    async def delete_schedule(self, helper_id: str) -> None:
+        await self._delete_helper("schedule", helper_id)
+
+    # Counter
+    async def get_counters(self) -> list[dict[str, Any]]:
+        return await self._get_helpers("counter")
+
+    async def create_counter(self, config: dict[str, Any]) -> None:
+        await self._create_helper("counter", config)
+
+    async def update_counter(self, helper_id: str, config: dict[str, Any]) -> None:
+        await self._update_helper("counter", helper_id, config)
+
+    async def delete_counter(self, helper_id: str) -> None:
+        await self._delete_helper("counter", helper_id)
+
     async def reload_helpers(self) -> None:
         """Reload all helper integrations."""
         for domain in [
@@ -402,6 +454,10 @@ class HAClient:
             "input_select",
             "input_text",
             "input_datetime",
+            "input_button",
+            "timer",
+            "schedule",
+            "counter",
         ]:
             with contextlib.suppress(Exception):
                 await self.call_service(domain, "reload")

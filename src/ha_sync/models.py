@@ -153,6 +153,38 @@ class InputButton(BaseEntityModel):
     icon: str | None = None
 
 
+class Timer(BaseEntityModel):
+    """Timer helper."""
+
+    id: str
+    name: str
+    icon: str | None = None
+    duration: str | None = None  # HH:MM:SS format
+    restore: bool = True
+
+
+class Schedule(BaseEntityModel):
+    """Schedule helper."""
+
+    id: str
+    name: str
+    icon: str | None = None
+    # Schedule stores time blocks per day - structure varies
+
+
+class Counter(BaseEntityModel):
+    """Counter helper."""
+
+    id: str
+    name: str
+    icon: str | None = None
+    initial: int | None = None
+    step: int = 1
+    minimum: int | None = None
+    maximum: int | None = None
+    restore: bool = True
+
+
 # Traditional input_* helpers (WebSocket-based)
 HELPER_MODELS: dict[str, type[BaseEntityModel]] = {
     "input_boolean": InputBoolean,
@@ -161,6 +193,9 @@ HELPER_MODELS: dict[str, type[BaseEntityModel]] = {
     "input_text": InputText,
     "input_datetime": InputDatetime,
     "input_button": InputButton,
+    "timer": Timer,
+    "schedule": Schedule,
+    "counter": Counter,
 }
 
 
@@ -242,17 +277,65 @@ class GroupLight(BaseEntityModel):
 
 
 # Template helper models by step_id (entity type)
+# UI supports: alarm_control_panel, binary_sensor, button, cover, event, fan,
+# image, light, lock, number, select, sensor, switch, update, vacuum, weather
+# We define models for common ones; others use generic handling with extra="allow"
 TEMPLATE_HELPER_MODELS: dict[str, type[BaseEntityModel]] = {
     "sensor": TemplateSensor,
     "binary_sensor": TemplateBinarySensor,
     "switch": TemplateSwitch,
+    # Additional types supported via generic handling:
+    # alarm_control_panel, button, cover, event, fan, image, light,
+    # lock, number, select, update, vacuum, weather
+}
+
+# All template entity types that can be created via UI
+TEMPLATE_ENTITY_TYPES = {
+    "alarm_control_panel",
+    "binary_sensor",
+    "button",
+    "cover",
+    "event",
+    "fan",
+    "image",
+    "light",
+    "lock",
+    "number",
+    "select",
+    "sensor",
+    "switch",
+    "update",
+    "vacuum",
+    "weather",
 }
 
 # Group helper models by step_id (entity type)
+# UI supports: binary_sensor, button, cover, event, fan, light, lock,
+# media_player, notify, number, sensor, switch, valve
+# We define models for common ones; others use generic handling with extra="allow"
 GROUP_HELPER_MODELS: dict[str, type[BaseEntityModel]] = {
     "binary_sensor": GroupBinarySensor,
     "sensor": GroupSensor,
     "light": GroupLight,
+    # Additional types supported via generic handling:
+    # button, cover, event, fan, lock, media_player, notify, number, switch, valve
+}
+
+# All group entity types that can be created via UI
+GROUP_ENTITY_TYPES = {
+    "binary_sensor",
+    "button",
+    "cover",
+    "event",
+    "fan",
+    "light",
+    "lock",
+    "media_player",
+    "notify",
+    "number",
+    "sensor",
+    "switch",
+    "valve",
 }
 
 

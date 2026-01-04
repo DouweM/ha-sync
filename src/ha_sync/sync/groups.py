@@ -1,5 +1,6 @@
 """Group helper sync implementation (config entry-based helpers)."""
 
+import logging
 from pathlib import Path
 from typing import Any
 
@@ -7,12 +8,16 @@ from rich.console import Console
 
 from ha_sync.client import HAClient
 from ha_sync.config import SyncConfig
-from ha_sync.models import GROUP_HELPER_MODELS
+from ha_sync.models import GROUP_ENTITY_TYPES, GROUP_HELPER_MODELS
 from ha_sync.utils import dump_yaml, filename_from_name, load_yaml
 
 from .base import BaseSyncer, DiffItem, SyncResult
 
 console = Console()
+logger = logging.getLogger(__name__)
+
+# Track warned types to avoid repeated warnings
+_warned_group_types: set[str] = set()
 
 
 class GroupSyncer(BaseSyncer):
@@ -49,6 +54,18 @@ class GroupSyncer(BaseSyncer):
             entry_id = helper.get("entry_id", "")
             step_id = helper.get("step_id", "unknown")
             if entry_id:
+                # Warn about unknown group entity types
+                if step_id not in GROUP_ENTITY_TYPES and step_id not in _warned_group_types:
+                    _warned_group_types.add(step_id)
+                    logger.warning(
+                        f"Unknown group entity type '{step_id}' - "
+                        "Home Assistant may have added a new type. "
+                        "Please report this at https://github.com/DouweM/ha-sync/issues"
+                    )
+                    console.print(
+                        f"  [yellow]Warning:[/yellow] Unknown group type '{step_id}'"
+                    )
+
                 result[f"{step_id}/{entry_id}"] = {
                     "subtype": step_id,
                     **helper,
