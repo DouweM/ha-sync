@@ -132,10 +132,47 @@ uv run ha-sync watch
 | `automations` | Automation rules |
 | `scripts` | Script sequences |
 | `scenes` | Scene configurations |
-| `helpers` | Input helpers (boolean, number, select, text, datetime) |
+| `helpers` | Input helpers (boolean, number, select, text, datetime, button, timer, counter, schedule) |
 | `templates` | Template sensors, binary sensors, switches |
-| `groups` | Entity groups |
-| `config_helpers` | Config entry-based helpers (utility meters, etc.) |
+| `groups` | Entity groups (binary sensors, sensors, lights, etc.) |
+| `config_helpers` | Config entry-based helpers (utility meters, integrations, thresholds, etc.) |
+
+## Directory Structure
+
+After running `ha-sync init`, the following directory structure is created:
+
+```
+.
+├── automations/              # Automation YAML files
+├── scripts/                  # Script YAML files
+├── scenes/                   # Scene YAML files
+├── dashboards/               # Dashboard directories
+│   └── <dashboard-name>/     # Each dashboard gets a directory
+│       ├── _meta.yaml        # Dashboard metadata (title, icon, etc.)
+│       └── 00_<view-name>.yaml # View files (prefixed for ordering)
+└── helpers/                  # All helper entities
+    ├── input_boolean/        # Input boolean helpers
+    ├── input_number/         # Input number helpers
+    ├── input_select/         # Input select helpers
+    ├── input_text/           # Input text helpers
+    ├── input_datetime/       # Input datetime helpers
+    ├── input_button/         # Input button helpers
+    ├── timer/                # Timer helpers
+    ├── counter/              # Counter helpers
+    ├── schedule/             # Schedule helpers
+    ├── template/             # Template helpers
+    │   ├── sensor/           # Template sensors
+    │   ├── binary_sensor/    # Template binary sensors
+    │   └── switch/           # Template switches
+    ├── group/                # Group helpers
+    │   ├── sensor/           # Group sensors
+    │   ├── binary_sensor/    # Group binary sensors
+    │   └── light/            # Group lights
+    ├── utility_meter/        # Utility meter helpers
+    ├── integration/          # Integration (Riemann sum) helpers
+    ├── threshold/            # Threshold helpers
+    └── tod/                  # Time of Day helpers
+```
 
 ## Development
 

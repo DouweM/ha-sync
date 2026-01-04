@@ -20,7 +20,7 @@ from ha_sync.models import (
     TodHelper,
     UtilityMeterHelper,
 )
-from ha_sync.utils import dump_yaml, filename_from_name, load_yaml
+from ha_sync.utils import dump_yaml, filename_from_name, load_yaml, relative_path
 
 from .base import BaseSyncer, DiffItem, SyncResult
 
@@ -196,14 +196,17 @@ class ConfigEntrySyncer(BaseSyncer):
                             dump_yaml(ordered, new_path)
                             old_path.unlink()
                             result.renamed.append((entry_id, entry_id))
+                            old_rel = relative_path(old_path)
+                            new_rel = relative_path(new_path)
                             console.print(
-                                f"  [blue]Renamed[/blue] {current_filename} -> {expected_filename}"
+                                f"  [blue]Renamed[/blue] {old_rel} -> {new_rel}"
                             )
                     elif ordered != local_normalized:
                         file_path = self.local_path / (current_filename or expected_filename)
                         dump_yaml(ordered, file_path)
                         result.updated.append(entry_id)
-                        console.print(f"  [yellow]Updated[/yellow] {name}")
+                        rel_path = relative_path(file_path)
+                        console.print(f"  [yellow]Updated[/yellow] {rel_path}")
                 else:
                     # New entry
                     filename = self._get_filename(name, entry_id, used_filenames)
@@ -211,23 +214,26 @@ class ConfigEntrySyncer(BaseSyncer):
                     file_path = self.local_path / filename
                     dump_yaml(ordered, file_path)
                     result.created.append(entry_id)
-                    console.print(f"  [green]Created[/green] {name}")
+                    rel_path = relative_path(file_path)
+                    console.print(f"  [green]Created[/green] {rel_path}")
 
             except Exception as e:
                 result.errors.append((entry_id, str(e)))
-                console.print(f"  [red]Error[/red] {name}: {e}")
+                file_path = self.local_path / self._get_filename(name, entry_id, set())
+                rel_path = relative_path(file_path)
+                console.print(f"  [red]Error[/red] {rel_path}: {e}")
 
         if sync_deletions:
             for entry_id, local_data in local.items():
                 if entry_id not in remote:
-                    name = local_data.get("name", entry_id)
                     filename = local_data.get("_filename")
                     if filename:
                         file_path = self.local_path / filename
                         if file_path.exists():
                             file_path.unlink()
                             result.deleted.append(entry_id)
-                            console.print(f"  [red]Deleted[/red] {name}")
+                            rel_path = relative_path(file_path)
+                            console.print(f"  [red]Deleted[/red] {rel_path}")
         else:
             orphaned = [eid for eid in local if eid not in remote]
             if orphaned:
@@ -247,28 +253,47 @@ class ConfigEntrySyncer(BaseSyncer):
         """Push local helpers to Home Assistant."""
         result = SyncResult(created=[], updated=[], deleted=[], renamed=[], errors=[])
 
-        remote = await self.get_remote_entities()
         local = self.get_local_entities()
+        remote = await self.get_remote_entities()
 
-        for entry_id, data in local.items():
+        # Get diff to determine what needs syncing
+        diff_items = await self.diff()
+
+        # Determine items to create/update
+        if force:
+            # Force mode: all local items
+            items_to_process = list(local.items())
+        else:
+            # Normal mode: only items from diff (added or modified)
+            items_to_process = [
+                (item.entity_id, local[item.entity_id])
+                for item in diff_items
+                if item.status in ("added", "modified") and item.entity_id in local
+            ]
+
+        for entry_id, data in items_to_process:
             name = data.get("name", entry_id)
             current_filename = data.get("_filename")
             # Remove _filename before sending to HA
             config = {k: v for k, v in data.items() if k != "_filename"}
+            file_path = self.local_path / (current_filename or filename_from_name(name, entry_id))
+            rel_path = relative_path(file_path)
+
+            is_update = entry_id in remote
 
             try:
-                if entry_id in remote:
+                if is_update:
                     if dry_run:
-                        console.print(f"  [cyan]Would update[/cyan] {name}")
+                        console.print(f"  [cyan]Would update[/cyan] {rel_path}")
                         result.updated.append(entry_id)
                         continue
 
                     await self.client.update_config_entry(entry_id, config)
                     result.updated.append(entry_id)
-                    console.print(f"  [yellow]Updated[/yellow] {name}")
+                    console.print(f"  [yellow]Updated[/yellow] {rel_path}")
                 else:
                     if dry_run:
-                        console.print(f"  [cyan]Would create[/cyan] {name}")
+                        console.print(f"  [cyan]Would create[/cyan] {rel_path}")
                         result.created.append(entry_id)
                         continue
 
@@ -276,7 +301,7 @@ class ConfigEntrySyncer(BaseSyncer):
                         self.domain, config
                     )
                     result.created.append(entry_id)
-                    console.print(f"  [green]Created[/green] {name}")
+                    console.print(f"  [green]Created[/green] {rel_path}")
 
                     # Update local file with new entry_id
                     config["entry_id"] = new_entry_id
@@ -293,24 +318,36 @@ class ConfigEntrySyncer(BaseSyncer):
 
             except Exception as e:
                 result.errors.append((entry_id, str(e)))
-                console.print(f"  [red]Error[/red] {name}: {e}")
+                console.print(f"  [red]Error[/red] {rel_path}: {e}")
 
         if sync_deletions:
-            for entry_id in remote:
-                if entry_id not in local:
-                    name = remote[entry_id].get("name", entry_id)
-                    try:
-                        if dry_run:
-                            console.print(f"  [cyan]Would delete[/cyan] {name}")
-                            result.deleted.append(entry_id)
-                            continue
+            if force:
+                # Force mode: delete all remote items not in local
+                items_to_delete = [entry_id for entry_id in remote if entry_id not in local]
+            else:
+                # Normal mode: only items from diff
+                items_to_delete = [
+                    item.entity_id
+                    for item in diff_items
+                    if item.status == "deleted"
+                ]
 
-                        await self.client.delete_config_entry(entry_id)
+            for entry_id in items_to_delete:
+                name = remote[entry_id].get("name", entry_id)
+                file_path = self.local_path / filename_from_name(name, entry_id)
+                rel_path = relative_path(file_path)
+                try:
+                    if dry_run:
+                        console.print(f"  [cyan]Would delete[/cyan] {rel_path}")
                         result.deleted.append(entry_id)
-                        console.print(f"  [red]Deleted[/red] {name}")
-                    except Exception as e:
-                        result.errors.append((entry_id, str(e)))
-                        console.print(f"  [red]Error deleting[/red] {name}: {e}")
+                        continue
+
+                    await self.client.delete_config_entry(entry_id)
+                    result.deleted.append(entry_id)
+                    console.print(f"  [red]Deleted[/red] {rel_path}")
+                except Exception as e:
+                    result.errors.append((entry_id, str(e)))
+                    console.print(f"  [red]Error deleting[/red] {rel_path}: {e}")
         else:
             orphaned = [eid for eid in remote if eid not in local]
             if orphaned:

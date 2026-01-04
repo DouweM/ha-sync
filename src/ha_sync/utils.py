@@ -13,8 +13,9 @@ class CleanDumper(yaml.SafeDumper):
 
 
 def _str_representer(dumper: CleanDumper, data: str) -> yaml.ScalarNode:
-    """Represent strings, using literal style for multiline."""
-    if "\n" in data:
+    """Represent strings, using literal style for multiline or templates."""
+    # Use literal block style for multiline strings or templates (to avoid quote escaping)
+    if "\n" in data or ("{{" in data and "}}" in data):
         return dumper.represent_scalar("tag:yaml.org,2002:str", data, style="|")
     return dumper.represent_scalar("tag:yaml.org,2002:str", data)
 
@@ -94,3 +95,11 @@ def filename_from_name(name: str, fallback_id: str | None = None) -> str:
     if fallback_id:
         return f"{fallback_id}.yaml"
     return "unnamed.yaml"
+
+
+def relative_path(path: Path) -> str:
+    """Get path relative to current working directory for clickable output."""
+    try:
+        return str(path.relative_to(Path.cwd()))
+    except ValueError:
+        return str(path)

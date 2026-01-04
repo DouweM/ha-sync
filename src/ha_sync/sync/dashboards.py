@@ -11,6 +11,7 @@ from ha_sync.models import View
 from ha_sync.utils import (
     dump_yaml,
     load_yaml,
+    relative_path,
     slugify,
 )
 
@@ -270,7 +271,9 @@ class DashboardSyncer(BaseSyncer):
         for dir_name, data in remote.items():
             meta = data["meta"]
             config = data["config"]
-            display_name = meta.get("title", dir_name)
+            dashboard_dir = self.local_path / dir_name
+            meta_path = dashboard_dir / META_FILE
+            rel_meta_path = relative_path(meta_path)
 
             try:
                 if dir_name in local:
@@ -281,15 +284,19 @@ class DashboardSyncer(BaseSyncer):
                     if dump_yaml(remote_normalized) != dump_yaml(local_normalized):
                         self._save_dashboard_locally(dir_name, meta, config)
                         result.updated.append(dir_name)
-                        console.print(f"  [yellow]Updated[/yellow] {display_name}")
+                        console.print(f"  [yellow]Updated[/yellow] {rel_meta_path}")
+                        # List views
+                        self._print_views(dashboard_dir, "yellow", "Updated")
                 else:
                     self._save_dashboard_locally(dir_name, meta, config)
                     result.created.append(dir_name)
-                    console.print(f"  [green]Created[/green] {display_name}")
+                    console.print(f"  [green]Created[/green] {rel_meta_path}")
+                    # List views
+                    self._print_views(dashboard_dir, "green", "Created")
 
             except Exception as e:
                 result.errors.append((dir_name, str(e)))
-                console.print(f"  [red]Error[/red] {display_name}: {e}")
+                console.print(f"  [red]Error[/red] {rel_meta_path}: {e}")
 
         # Delete local directories that don't exist in remote
         if sync_deletions:
@@ -299,10 +306,13 @@ class DashboardSyncer(BaseSyncer):
                 if dir_name not in remote:
                     dashboard_dir = self.local_path / dir_name
                     if dashboard_dir.exists():
+                        # Print views before deleting
+                        self._print_views(dashboard_dir, "red", "Deleted")
+                        meta_path = dashboard_dir / META_FILE
+                        rel_meta_path = relative_path(meta_path)
                         shutil.rmtree(dashboard_dir)
                         result.deleted.append(dir_name)
-                        display_name = local[dir_name]["meta"].get("title", dir_name)
-                        console.print(f"  [red]Deleted[/red] {display_name}")
+                        console.print(f"  [red]Deleted[/red] {rel_meta_path}")
         else:
             # Warn about local directories without remote counterpart
             orphaned = [d for d in local if d not in remote]
@@ -323,29 +333,36 @@ class DashboardSyncer(BaseSyncer):
         """Push local dashboards to Home Assistant."""
         result = SyncResult(created=[], updated=[], deleted=[], renamed=[], errors=[])
 
-        remote = await self.get_remote_entities()
         local = self.get_local_entities()
+        remote = await self.get_remote_entities()
 
-        # Detect url_path renames: same dir_name but different url_path
-        # Maps dir_name -> (old_url_path, new_url_path)
-        url_path_renames: dict[str, tuple[str, str]] = {}
-        for dir_name, local_data in local.items():
-            if dir_name in remote and dir_name != "lovelace":
-                local_url_path = local_data["meta"].get("url_path")
-                remote_url_path = remote[dir_name]["meta"].get("url_path")
-                if local_url_path and remote_url_path and local_url_path != remote_url_path:
-                    url_path_renames[dir_name] = (remote_url_path, local_url_path)
+        # Get diff to determine what needs syncing
+        diff_items = await self.diff()
 
-        # Process url_path renames first
-        for dir_name, (old_url_path, new_url_path) in url_path_renames.items():
+        # Track processed items to avoid double-processing
+        processed_dirs: set[str] = set()
+
+        # Process url_path renames first (always, regardless of force)
+        for item in diff_items:
+            if item.status != "renamed" or not item.new_id:
+                continue
+
+            dir_name = item.entity_id
+            old_url_path = remote[dir_name]["meta"].get("url_path")
+            new_url_path = item.new_id
+            processed_dirs.add(dir_name)
+
             local_data = local[dir_name]
             meta = local_data["meta"]
             config = local_data["config"]
-            display_name = meta.get("title", dir_name)
+            dashboard_dir = self.local_path / dir_name
+            meta_path = dashboard_dir / META_FILE
+            rel_meta_path = relative_path(meta_path)
+            title = meta.get("title", dir_name)
 
             if dry_run:
                 console.print(
-                    f"  [cyan]Would rename url_path[/cyan] {old_url_path} -> {new_url_path}"
+                    f"  [cyan]Would rename url_path[/cyan] {rel_meta_path} ({old_url_path} -> {new_url_path})"
                 )
                 result.renamed.append((old_url_path, new_url_path))
                 continue
@@ -354,7 +371,7 @@ class DashboardSyncer(BaseSyncer):
                 # Create new dashboard with new url_path
                 await self.client.create_dashboard(
                     url_path=new_url_path,
-                    title=display_name,
+                    title=title,
                     icon=meta.get("icon"),
                     show_in_sidebar=meta.get("show_in_sidebar", True),
                     require_admin=meta.get("require_admin", False),
@@ -365,58 +382,80 @@ class DashboardSyncer(BaseSyncer):
                 await self.client.delete_dashboard(old_url_path)
 
                 result.renamed.append((old_url_path, new_url_path))
-                console.print(f"  [blue]Renamed[/blue] {old_url_path} -> {new_url_path}")
+                console.print(f"  [blue]Renamed[/blue] {rel_meta_path} ({old_url_path} -> {new_url_path})")
 
             except Exception as e:
                 result.errors.append((dir_name, str(e)))
-                console.print(f"  [red]Error renaming[/red] {display_name}: {e}")
+                console.print(f"  [red]Error renaming[/red] {rel_meta_path}: {e}")
 
-        for dir_name, data in local.items():
-            # Skip if already handled as rename
-            if dir_name in url_path_renames:
-                continue
+        # Determine items to create/update
+        if force:
+            # Force mode: all local items not already processed
+            items_to_process = [
+                (dir_name, local[dir_name])
+                for dir_name in local
+                if dir_name not in processed_dirs
+            ]
+        else:
+            # Normal mode: only items from diff (added or modified)
+            items_to_process = [
+                (item.entity_id, local[item.entity_id])
+                for item in diff_items
+                if item.status in ("added", "modified") and item.entity_id in local
+            ]
 
+        for dir_name, data in items_to_process:
             config = data["config"]
             meta = data["meta"]
-            display_name = meta.get("title", dir_name)
+            dashboard_dir = self.local_path / dir_name
+            meta_path = dashboard_dir / META_FILE
+            rel_meta_path = relative_path(meta_path)
+            title = meta.get("title", dir_name)
 
             try:
                 # Get url_path from stored meta, or reconstruct from dir_name
                 stored_url_path = meta.get("url_path")
                 url_path = url_path_from_dir_name(dir_name, stored_url_path)
 
-                if dir_name in remote:
+                is_update = dir_name in remote
+
+                if is_update:
                     if dry_run:
-                        console.print(f"  [cyan]Would update[/cyan] {display_name}")
+                        console.print(f"  [cyan]Would update[/cyan] {rel_meta_path}")
+                        self._print_views(dashboard_dir, "cyan", "Would update")
                         result.updated.append(dir_name)
                         continue
 
                     await self.client.save_dashboard_config(config, url_path)
                     result.updated.append(dir_name)
-                    console.print(f"  [yellow]Updated[/yellow] {display_name}")
+                    console.print(f"  [yellow]Updated[/yellow] {rel_meta_path}")
+                    self._print_views(dashboard_dir, "yellow", "Updated")
                 else:
                     # Create new dashboard
                     if dir_name == "lovelace":
                         # Default dashboard doesn't need creation
                         if dry_run:
-                            console.print(f"  [cyan]Would create[/cyan] {display_name}")
+                            console.print(f"  [cyan]Would create[/cyan] {rel_meta_path}")
+                            self._print_views(dashboard_dir, "cyan", "Would create")
                             result.created.append(dir_name)
                             continue
 
                         await self.client.save_dashboard_config(config, None)
                         result.created.append(dir_name)
-                        console.print(f"  [green]Created[/green] {display_name}")
+                        console.print(f"  [green]Created[/green] {rel_meta_path}")
+                        self._print_views(dashboard_dir, "green", "Created")
                     else:
                         # Create new dashboard first, then save config
                         if dry_run:
-                            console.print(f"  [cyan]Would create[/cyan] {display_name}")
+                            console.print(f"  [cyan]Would create[/cyan] {rel_meta_path}")
+                            self._print_views(dashboard_dir, "cyan", "Would create")
                             result.created.append(dir_name)
                             continue
 
                         # Create the dashboard entry
                         await self.client.create_dashboard(
                             url_path=url_path or f"dashboard-{dir_name}",
-                            title=display_name,
+                            title=title,
                             icon=meta.get("icon"),
                             show_in_sidebar=meta.get("show_in_sidebar", True),
                             require_admin=meta.get("require_admin", False),
@@ -424,24 +463,59 @@ class DashboardSyncer(BaseSyncer):
                         # Then save the config
                         await self.client.save_dashboard_config(config, url_path)
                         result.created.append(dir_name)
-                        console.print(f"  [green]Created[/green] {display_name}")
+                        console.print(f"  [green]Created[/green] {rel_meta_path}")
+                        self._print_views(dashboard_dir, "green", "Created")
 
             except Exception as e:
                 result.errors.append((dir_name, str(e)))
-                console.print(f"  [red]Error[/red] {display_name}: {e}")
+                console.print(f"  [red]Error[/red] {rel_meta_path}: {e}")
 
-        # Auto-rename view files to match content (after successful push)
-        if not dry_run:
-            self._rename_view_files(local)
+        # Process deletions
+        if sync_deletions:
+            if force:
+                # Force mode: delete all remote items not in local
+                items_to_delete = [
+                    dir_name for dir_name in remote
+                    if dir_name not in local and dir_name not in processed_dirs
+                ]
+            else:
+                # Normal mode: only items from diff
+                items_to_delete = [
+                    item.entity_id
+                    for item in diff_items
+                    if item.status == "deleted"
+                ]
 
-        # Warn about remote items without local counterpart
-        if not sync_deletions:
-            orphaned = [d for d in remote if d not in local and d not in url_path_renames]
+            for dir_name in items_to_delete:
+                url_path = remote[dir_name]["meta"].get("url_path")
+                dashboard_dir = self.local_path / dir_name
+                meta_path = dashboard_dir / META_FILE
+                rel_meta_path = relative_path(meta_path)
+
+                try:
+                    if dry_run:
+                        console.print(f"  [cyan]Would delete[/cyan] {rel_meta_path}")
+                        result.deleted.append(dir_name)
+                        continue
+
+                    await self.client.delete_dashboard(url_path)
+                    result.deleted.append(dir_name)
+                    console.print(f"  [red]Deleted[/red] {rel_meta_path}")
+                except Exception as e:
+                    result.errors.append((dir_name, str(e)))
+                    console.print(f"  [red]Error deleting[/red] {rel_meta_path}: {e}")
+        else:
+            # Warn about remote items without local counterpart
+            orphaned = [d for d in remote if d not in local and d not in processed_dirs]
             if orphaned:
                 console.print(
                     f"  [dim]{len(orphaned)} remote dashboard(s) not in local files "
                     "(use --sync-deletions to remove)[/dim]"
                 )
+
+        # Auto-rename view files to match content (after successful push)
+        if not dry_run:
+            self._rename_view_files(local)
 
         return result
 
@@ -507,22 +581,38 @@ class DashboardSyncer(BaseSyncer):
                     else:
                         temp_file.rename(new_file)
 
+                    old_rel = relative_path(old_file)
+                    new_rel = relative_path(new_file)
                     console.print(
-                        f"  [blue]Renamed view[/blue] {old_file.name} -> {new_file.name}"
+                        f"  [blue]Renamed view[/blue] {old_rel} -> {new_rel}"
                     )
+
+    def _print_views(self, dashboard_dir: Path, color: str, action: str) -> None:
+        """Print view files under a dashboard."""
+        for view_file in sorted(dashboard_dir.glob("*.yaml")):
+            if view_file.name == META_FILE:
+                continue
+            rel_path = relative_path(view_file)
+            console.print(f"    [{color}]{action}[/{color}] {rel_path}")
 
     def _normalize_config(self, config: dict[str, Any]) -> dict[str, Any]:
         """Normalize a dashboard config for comparison.
 
         This ensures consistent key ordering and removes title if empty.
+        Also strips 'position' from views since it's a local-only field for ordering.
         """
         result: dict[str, Any] = {}
 
         # Copy non-view keys (like strategy, swipe_nav, etc.) as-is
         for key, value in config.items():
             if key == "views":
-                # Normalize views through Pydantic for consistent comparison
-                result["views"] = [View.normalize(view) for view in value]
+                # Normalize views through Pydantic, then strip 'position' (local-only)
+                normalized_views = []
+                for view in value:
+                    normalized = View.normalize(view)
+                    normalized.pop("position", None)
+                    normalized_views.append(normalized)
+                result["views"] = normalized_views
             elif key == "title" and not value:
                 # Skip empty title
                 continue

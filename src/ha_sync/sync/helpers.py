@@ -13,6 +13,7 @@ from ha_sync.utils import (
     filename_from_id,
     id_from_filename,
     load_yaml,
+    relative_path,
 )
 
 from .base import BaseSyncer, DiffItem, SyncResult
@@ -136,6 +137,8 @@ class HelperSyncer(BaseSyncer):
 
             file_path = self._helper_path(helper_type) / filename_from_id(helper_id)
 
+            rel_path = relative_path(file_path)
+
             try:
                 if full_id in local:
                     local_config = {k: v for k, v in local[full_id].items() if k != "type"}
@@ -146,15 +149,15 @@ class HelperSyncer(BaseSyncer):
                     if ordered != local_normalized:
                         dump_yaml(ordered, file_path)
                         result.updated.append(full_id)
-                        console.print(f"  [yellow]Updated[/yellow] {full_id}")
+                        console.print(f"  [yellow]Updated[/yellow] {rel_path}")
                 else:
                     dump_yaml(ordered, file_path)
                     result.created.append(full_id)
-                    console.print(f"  [green]Created[/green] {full_id}")
+                    console.print(f"  [green]Created[/green] {rel_path}")
 
             except Exception as e:
                 result.errors.append((full_id, str(e)))
-                console.print(f"  [red]Error[/red] {full_id}: {e}")
+                console.print(f"  [red]Error[/red] {rel_path}: {e}")
 
         # Delete local files that don't exist in remote
         if sync_deletions:
@@ -166,7 +169,8 @@ class HelperSyncer(BaseSyncer):
                     if file_path.exists():
                         file_path.unlink()
                         result.deleted.append(full_id)
-                        console.print(f"  [red]Deleted[/red] {full_id}")
+                        rel_path = relative_path(file_path)
+                        console.print(f"  [red]Deleted[/red] {rel_path}")
         else:
             # Warn about local files without remote counterpart
             orphaned = [fid for fid in local if fid not in remote]
@@ -187,39 +191,40 @@ class HelperSyncer(BaseSyncer):
         """Push local helpers to Home Assistant."""
         result = SyncResult(created=[], updated=[], deleted=[], renamed=[], errors=[])
 
-        remote = await self.get_remote_entities()
         local = self.get_local_entities()
+        remote = await self.get_remote_entities()
 
-        # Handle renames
-        renames: dict[str, str] = {}
-        for helper_type in HELPER_TYPES:
-            helper_path = self._helper_path(helper_type)
-            if not helper_path.exists():
+        # Get diff to determine what needs syncing
+        diff_items = await self.diff()
+
+        # Track processed items to avoid double-processing
+        processed_ids: set[str] = set()
+
+        # Process renames first (always, regardless of force)
+        for item in diff_items:
+            if item.status != "renamed" or not item.new_id:
                 continue
 
-            for yaml_file in helper_path.glob("*.yaml"):
-                filename_id = id_from_filename(yaml_file)
-                data = load_yaml(yaml_file)
-                if data and isinstance(data, dict):
-                    content_id = data.get("id", filename_id)
-                    old_full_id = f"{helper_type}/{filename_id}"
-                    new_full_id = f"{helper_type}/{content_id}"
-                    if content_id != filename_id and old_full_id in remote:
-                        renames[old_full_id] = new_full_id
+            old_full_id = item.entity_id
+            new_full_id = item.new_id
+            processed_ids.add(old_full_id)
+            processed_ids.add(new_full_id)
 
-        for old_full_id, new_full_id in renames.items():
             helper_type = old_full_id.split("/")[0]
             old_id = old_full_id.split("/")[1]
             new_id = new_full_id.split("/")[1]
+            old_file = self._helper_path(helper_type) / filename_from_id(old_id)
+            new_file = self._helper_path(helper_type) / filename_from_id(new_id)
+            old_rel_path = relative_path(old_file)
+            new_rel_path = relative_path(new_file)
 
             if dry_run:
-                console.print(f"  [cyan]Would rename[/cyan] {old_full_id} -> {new_full_id}")
+                console.print(f"  [cyan]Would rename[/cyan] {old_rel_path} -> {new_rel_path}")
                 result.renamed.append((old_full_id, new_full_id))
                 continue
 
             try:
-                yaml_file = self._helper_path(helper_type) / filename_from_id(old_id)
-                config = load_yaml(yaml_file)
+                config = load_yaml(old_file)
                 if not config:
                     continue
 
@@ -228,71 +233,103 @@ class HelperSyncer(BaseSyncer):
                 await self._create_helper(helper_type, config)
 
                 # Rename local file
-                new_file = self._helper_path(helper_type) / filename_from_id(new_id)
-                yaml_file.rename(new_file)
+                old_file.rename(new_file)
 
                 result.renamed.append((old_full_id, new_full_id))
-                console.print(f"  [blue]Renamed[/blue] {old_full_id} -> {new_full_id}")
-
-                remote.pop(old_full_id, None)
-                local[new_full_id] = local.pop(old_full_id, {"type": helper_type, **config})
+                console.print(f"  [blue]Renamed[/blue] {old_rel_path} -> {new_rel_path}")
 
             except Exception as e:
                 result.errors.append((old_full_id, str(e)))
-                console.print(f"  [red]Error renaming[/red] {old_full_id}: {e}")
+                console.print(f"  [red]Error renaming[/red] {old_rel_path}: {e}")
+
+        # Determine items to create/update
+        if force:
+            # Force mode: all local items not already processed
+            items_to_process = [
+                (full_id, local[full_id])
+                for full_id in local
+                if full_id not in processed_ids
+            ]
+        else:
+            # Normal mode: only items from diff (added or modified)
+            items_to_process = [
+                (item.entity_id, local[item.entity_id])
+                for item in diff_items
+                if item.status in ("added", "modified") and item.entity_id in local
+            ]
 
         # Process creates and updates
-        for full_id, data in local.items():
-            if full_id in [r[0] for r in renames.items()]:
-                continue
-
+        for full_id, data in items_to_process:
             helper_type = data["type"]
             helper_id = data.get("id", full_id.split("/")[-1])
             config = {k: v for k, v in data.items() if k != "type"}
+            file_path = self._helper_path(helper_type) / filename_from_id(helper_id)
+            rel_path = relative_path(file_path)
+
+            is_update = full_id in remote
 
             try:
-                if full_id in remote:
-                    if dry_run:
-                        console.print(f"  [cyan]Would update[/cyan] {full_id}")
-                        result.updated.append(full_id)
-                        continue
+                if dry_run:
+                    action = "Would update" if is_update else "Would create"
+                    console.print(f"  [cyan]{action}[/cyan] {rel_path}")
+                    (result.updated if is_update else result.created).append(full_id)
+                    continue
 
+                if is_update:
                     await self._update_helper(helper_type, helper_id, config)
                     result.updated.append(full_id)
-                    console.print(f"  [yellow]Updated[/yellow] {full_id}")
+                    console.print(f"  [yellow]Updated[/yellow] {rel_path}")
                 else:
-                    if dry_run:
-                        console.print(f"  [cyan]Would create[/cyan] {full_id}")
-                        result.created.append(full_id)
-                        continue
-
                     await self._create_helper(helper_type, config)
                     result.created.append(full_id)
-                    console.print(f"  [green]Created[/green] {full_id}")
+                    console.print(f"  [green]Created[/green] {rel_path}")
 
             except Exception as e:
                 result.errors.append((full_id, str(e)))
-                console.print(f"  [red]Error[/red] {full_id}: {e}")
+                console.print(f"  [red]Error[/red] {rel_path}: {e}")
 
         # Process deletions
         if sync_deletions:
-            for full_id in remote:
-                if full_id not in local and full_id not in renames:
-                    helper_type = full_id.split("/")[0]
-                    helper_id = full_id.split("/")[1]
+            if force:
+                # Force mode: delete all remote items not in local
+                items_to_delete = [
+                    full_id for full_id in remote
+                    if full_id not in local and full_id not in processed_ids
+                ]
+            else:
+                # Normal mode: only items from diff
+                items_to_delete = [
+                    item.entity_id
+                    for item in diff_items
+                    if item.status == "deleted"
+                ]
 
-                    try:
-                        if dry_run:
-                            console.print(f"  [cyan]Would delete[/cyan] {full_id}")
-                            result.deleted.append(full_id)
-                            continue
+            for full_id in items_to_delete:
+                helper_type = full_id.split("/")[0]
+                helper_id = full_id.split("/")[1]
+                file_path = self._helper_path(helper_type) / filename_from_id(helper_id)
+                rel_path = relative_path(file_path)
 
-                        await self._delete_helper(helper_type, helper_id)
+                try:
+                    if dry_run:
+                        console.print(f"  [cyan]Would delete[/cyan] {rel_path}")
                         result.deleted.append(full_id)
-                        console.print(f"  [red]Deleted[/red] {full_id}")
-                    except Exception as e:
-                        result.errors.append((full_id, str(e)))
-                        console.print(f"  [red]Error deleting[/red] {full_id}: {e}")
+                        continue
+
+                    await self._delete_helper(helper_type, helper_id)
+                    result.deleted.append(full_id)
+                    console.print(f"  [red]Deleted[/red] {rel_path}")
+                except Exception as e:
+                    result.errors.append((full_id, str(e)))
+                    console.print(f"  [red]Error deleting[/red] {rel_path}: {e}")
+        else:
+            # Warn about remote items without local counterpart
+            orphaned = [fid for fid in remote if fid not in local and fid not in processed_ids]
+            if orphaned:
+                console.print(
+                    f"  [dim]{len(orphaned)} remote item(s) not in local files "
+                    "(use --sync-deletions to remove)[/dim]"
+                )
 
         # Reload helpers
         if not dry_run and result.has_changes:
@@ -301,15 +338,6 @@ class HelperSyncer(BaseSyncer):
                 console.print("  [dim]Reloaded helpers[/dim]")
             except Exception as e:
                 console.print(f"  [red]Error reloading[/red]: {e}")
-
-        # Warn about remote items without local counterpart
-        if not sync_deletions:
-            orphaned = [fid for fid in remote if fid not in local and fid not in renames]
-            if orphaned:
-                console.print(
-                    f"  [dim]{len(orphaned)} remote item(s) not in local files "
-                    "(use --sync-deletions to remove)[/dim]"
-                )
 
         return result
 

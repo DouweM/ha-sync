@@ -9,7 +9,7 @@ from rich.console import Console
 from ha_sync.client import HAClient
 from ha_sync.config import SyncConfig
 from ha_sync.models import GROUP_ENTITY_TYPES, GROUP_HELPER_MODELS
-from ha_sync.utils import dump_yaml, filename_from_name, load_yaml
+from ha_sync.utils import dump_yaml, filename_from_name, load_yaml, relative_path
 
 from .base import BaseSyncer, DiffItem, SyncResult
 
@@ -35,7 +35,7 @@ class GroupSyncer(BaseSyncer):
 
     @property
     def local_path(self) -> Path:
-        return self.config.groups_path
+        return self.config.helpers_path / "group"
 
     def _subtype_path(self, subtype: str) -> Path:
         """Get path for a specific subtype (binary_sensor, sensor, light)."""
@@ -100,11 +100,15 @@ class GroupSyncer(BaseSyncer):
                 if data and isinstance(data, dict):
                     entry_id = data.get("entry_id")
                     if entry_id:
-                        result[f"{subtype}/{entry_id}"] = {
-                            "subtype": subtype,
-                            "_filename": yaml_file.name,
-                            **data,
-                        }
+                        key = f"{subtype}/{entry_id}"
+                    else:
+                        # New file without entry_id - use filename as temporary key
+                        key = f"{subtype}/_new/{yaml_file.stem}"
+                    result[key] = {
+                        "subtype": subtype,
+                        "_filename": yaml_file.name,
+                        **data,
+                    }
 
         return result
 
@@ -182,14 +186,17 @@ class GroupSyncer(BaseSyncer):
                             dump_yaml(ordered, new_path)
                             old_path.unlink()
                             result.renamed.append((full_id, full_id))
+                            old_rel = relative_path(old_path)
+                            new_rel = relative_path(new_path)
                             console.print(
-                                f"  [blue]Renamed[/blue] {current_filename} -> {expected_filename}"
+                                f"  [blue]Renamed[/blue] {old_rel} -> {new_rel}"
                             )
                     elif ordered != local_normalized:
                         file_path = subtype_path / (current_filename or expected_filename)
                         dump_yaml(ordered, file_path)
                         result.updated.append(full_id)
-                        console.print(f"  [yellow]Updated[/yellow] {name}")
+                        rel_path = relative_path(file_path)
+                        console.print(f"  [yellow]Updated[/yellow] {rel_path}")
                 else:
                     # New entry
                     filename = self._get_filename(name, entry_id, used_filenames[subtype])
@@ -197,25 +204,28 @@ class GroupSyncer(BaseSyncer):
                     file_path = subtype_path / filename
                     dump_yaml(ordered, file_path)
                     result.created.append(full_id)
-                    console.print(f"  [green]Created[/green] {name}")
+                    rel_path = relative_path(file_path)
+                    console.print(f"  [green]Created[/green] {rel_path}")
 
             except Exception as e:
                 result.errors.append((full_id, str(e)))
-                console.print(f"  [red]Error[/red] {name}: {e}")
+                file_path = subtype_path / self._get_filename(name, entry_id, set())
+                rel_path = relative_path(file_path)
+                console.print(f"  [red]Error[/red] {rel_path}: {e}")
 
         # Delete local files that don't exist in remote
         if sync_deletions:
             for full_id, local_data in local.items():
                 if full_id not in remote:
                     subtype = local_data["subtype"]
-                    name = local_data.get("name", full_id.split("/")[-1])
                     filename = local_data.get("_filename")
                     if filename:
                         file_path = self._subtype_path(subtype) / filename
                         if file_path.exists():
                             file_path.unlink()
                             result.deleted.append(full_id)
-                            console.print(f"  [red]Deleted[/red] {name}")
+                            rel_path = relative_path(file_path)
+                            console.print(f"  [red]Deleted[/red] {rel_path}")
         else:
             # Warn about local files without remote counterpart
             orphaned = [fid for fid in local if fid not in remote]
@@ -236,39 +246,58 @@ class GroupSyncer(BaseSyncer):
         """Push local group helpers to Home Assistant."""
         result = SyncResult(created=[], updated=[], deleted=[], renamed=[], errors=[])
 
-        remote = await self.get_remote_entities()
         local = self.get_local_entities()
+        remote = await self.get_remote_entities()
+
+        # Get diff to determine what needs syncing
+        diff_items = await self.diff()
+
+        # Determine items to create/update
+        if force:
+            # Force mode: all local items
+            items_to_process = list(local.items())
+        else:
+            # Normal mode: only items from diff (added or modified)
+            items_to_process = [
+                (item.entity_id, local[item.entity_id])
+                for item in diff_items
+                if item.status in ("added", "modified") and item.entity_id in local
+            ]
 
         # Process creates and updates
-        for full_id, data in local.items():
+        for full_id, data in items_to_process:
             subtype = data["subtype"]
             entry_id: str | None = data.get("entry_id")
             name = data.get("name", entry_id or full_id)
             current_filename = data.get("_filename")
             # Remove metadata before sending to HA
             config = {k: v for k, v in data.items() if k not in ("subtype", "_filename")}
+            file_path = self._subtype_path(subtype) / (current_filename or filename_from_name(name, entry_id or "new"))
+            rel_path = relative_path(file_path)
+
+            is_update = full_id in remote and entry_id is not None
 
             try:
-                if full_id in remote and entry_id:
+                if is_update:
                     # Update existing entry
                     if dry_run:
-                        console.print(f"  [cyan]Would update[/cyan] {name}")
+                        console.print(f"  [cyan]Would update[/cyan] {rel_path}")
                         result.updated.append(full_id)
                         continue
 
-                    await self.client.update_group_helper(entry_id, config)
+                    await self.client.update_group_helper(entry_id, config)  # type: ignore[arg-type]
                     result.updated.append(full_id)
-                    console.print(f"  [yellow]Updated[/yellow] {name}")
+                    console.print(f"  [yellow]Updated[/yellow] {rel_path}")
                 else:
                     # Create new entry
                     if dry_run:
-                        console.print(f"  [cyan]Would create[/cyan] {name}")
+                        console.print(f"  [cyan]Would create[/cyan] {rel_path}")
                         result.created.append(full_id)
                         continue
 
                     new_entry_id = await self.client.create_group_helper(subtype, config)
                     result.created.append(full_id)
-                    console.print(f"  [green]Created[/green] {name}")
+                    console.print(f"  [green]Created[/green] {rel_path}")
 
                     # Update local file with new entry_id
                     config["entry_id"] = new_entry_id
@@ -285,27 +314,40 @@ class GroupSyncer(BaseSyncer):
 
             except Exception as e:
                 result.errors.append((full_id, str(e)))
-                console.print(f"  [red]Error[/red] {name}: {e}")
+                console.print(f"  [red]Error[/red] {rel_path}: {e}")
 
         # Process deletions
         if sync_deletions:
-            for full_id in remote:
-                if full_id not in local:
-                    remote_data = remote[full_id]
-                    del_entry_id: str = remote_data.get("entry_id") or full_id.split("/")[-1]
-                    name = remote_data.get("name", del_entry_id)
-                    try:
-                        if dry_run:
-                            console.print(f"  [cyan]Would delete[/cyan] {name}")
-                            result.deleted.append(full_id)
-                            continue
+            if force:
+                # Force mode: delete all remote items not in local
+                items_to_delete = [full_id for full_id in remote if full_id not in local]
+            else:
+                # Normal mode: only items from diff
+                items_to_delete = [
+                    item.entity_id
+                    for item in diff_items
+                    if item.status == "deleted"
+                ]
 
-                        await self.client.delete_group_helper(del_entry_id)
+            for full_id in items_to_delete:
+                remote_data = remote[full_id]
+                subtype = remote_data.get("subtype", full_id.split("/")[0])
+                del_entry_id: str = remote_data.get("entry_id") or full_id.split("/")[-1]
+                name = remote_data.get("name", del_entry_id)
+                file_path = self._subtype_path(subtype) / filename_from_name(name, del_entry_id)
+                rel_path = relative_path(file_path)
+                try:
+                    if dry_run:
+                        console.print(f"  [cyan]Would delete[/cyan] {rel_path}")
                         result.deleted.append(full_id)
-                        console.print(f"  [red]Deleted[/red] {name}")
-                    except Exception as e:
-                        result.errors.append((full_id, str(e)))
-                        console.print(f"  [red]Error deleting[/red] {name}: {e}")
+                        continue
+
+                    await self.client.delete_group_helper(del_entry_id)
+                    result.deleted.append(full_id)
+                    console.print(f"  [red]Deleted[/red] {rel_path}")
+                except Exception as e:
+                    result.errors.append((full_id, str(e)))
+                    console.print(f"  [red]Error deleting[/red] {rel_path}: {e}")
         else:
             # Warn about remote items without local counterpart
             orphaned = [fid for fid in remote if fid not in local]

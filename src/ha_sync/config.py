@@ -48,30 +48,28 @@ class SyncConfig(BaseSettings):
     def helpers_path(self) -> Path:
         return Path("helpers")
 
-    @property
-    def templates_path(self) -> Path:
-        return Path("templates")
-
-    @property
-    def groups_path(self) -> Path:
-        return Path("groups")
-
     def ensure_dirs(self) -> None:
         """Create all required directories."""
         self.dashboards_path.mkdir(parents=True, exist_ok=True)
         self.automations_path.mkdir(parents=True, exist_ok=True)
         self.scripts_path.mkdir(parents=True, exist_ok=True)
         self.scenes_path.mkdir(parents=True, exist_ok=True)
+        # WebSocket-based helpers
         for helper_type in [
             "input_boolean",
             "input_number",
             "input_select",
             "input_text",
             "input_datetime",
+            "input_button",
+            "timer",
+            "schedule",
+            "counter",
         ]:
             (self.helpers_path / helper_type).mkdir(parents=True, exist_ok=True)
-        self.templates_path.mkdir(parents=True, exist_ok=True)
-        self.groups_path.mkdir(parents=True, exist_ok=True)
+        # Template and group helpers (subdirs created on demand)
+        (self.helpers_path / "template").mkdir(parents=True, exist_ok=True)
+        (self.helpers_path / "group").mkdir(parents=True, exist_ok=True)
 
     @classmethod
     def is_configured(cls) -> bool:

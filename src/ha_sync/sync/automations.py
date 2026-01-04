@@ -12,6 +12,7 @@ from ha_sync.utils import (
     dump_yaml,
     filename_from_name,
     load_yaml,
+    relative_path,
 )
 
 from .base import BaseSyncer, DiffItem, SyncResult
@@ -81,7 +82,6 @@ class AutomationSyncer(BaseSyncer):
 
         for auto_id, config in remote.items():
             alias = config.get("alias", "")
-            display_name = alias or auto_id
 
             # Ensure ID is in config
             if "id" not in config:
@@ -102,6 +102,7 @@ class AutomationSyncer(BaseSyncer):
 
             used_filenames.add(filename)
             file_path = self.local_path / filename
+            rel_path = relative_path(file_path)
 
             if auto_id in local:
                 # Check if content changed (exclude _filename metadata)
@@ -112,11 +113,11 @@ class AutomationSyncer(BaseSyncer):
                 if ordered != local_normalized:
                     dump_yaml(ordered, file_path)
                     result.updated.append(auto_id)
-                    console.print(f"  [yellow]Updated[/yellow] {display_name}")
+                    console.print(f"  [yellow]Updated[/yellow] {rel_path}")
             else:
                 dump_yaml(ordered, file_path)
                 result.created.append(auto_id)
-                console.print(f"  [green]Created[/green] {display_name}")
+                console.print(f"  [green]Created[/green] {rel_path}")
 
         # Delete local files that don't exist in remote
         if sync_deletions:
@@ -128,8 +129,8 @@ class AutomationSyncer(BaseSyncer):
                         if file_path.exists():
                             file_path.unlink()
                             result.deleted.append(auto_id)
-                            display_name = local_data.get("alias", auto_id)
-                            console.print(f"  [red]Deleted[/red] {display_name}")
+                            rel_path = relative_path(file_path)
+                            console.print(f"  [red]Deleted[/red] {rel_path}")
         else:
             # Warn about local files without remote counterpart
             orphaned = [aid for aid in local if aid not in remote]
@@ -197,21 +198,23 @@ class AutomationSyncer(BaseSyncer):
             if item.status == "added":
                 config = local.get(auto_id, {})
                 push_config = {k: v for k, v in config.items() if not k.startswith("_")}
-                display_name = config.get("alias", auto_id)
+                alias = config.get("alias", "")
                 current_filename = config.get("_filename", "")
+                file_path = self.local_path / (current_filename or filename_from_name(alias, auto_id))
+                rel_path = relative_path(file_path)
 
                 try:
                     if dry_run:
-                        console.print(f"  [cyan]Would create[/cyan] {display_name}")
+                        console.print(f"  [cyan]Would create[/cyan] {rel_path}")
                         result.created.append(auto_id)
                     else:
                         await self.client.save_automation_config(auto_id, push_config)
                         result.created.append(auto_id)
-                        console.print(f"  [green]Created[/green] {display_name}")
+                        console.print(f"  [green]Created[/green] {rel_path}")
 
                     # Check if file should be renamed to match alias
-                    if current_filename and display_name:
-                        expected_filename = filename_from_name(display_name, auto_id)
+                    if current_filename and alias:
+                        expected_filename = filename_from_name(alias, auto_id)
                         if current_filename != expected_filename:
                             old_path = self.local_path / current_filename
                             new_path = self.local_path / expected_filename
@@ -220,26 +223,28 @@ class AutomationSyncer(BaseSyncer):
 
                 except Exception as e:
                     result.errors.append((auto_id, str(e)))
-                    console.print(f"  [red]Error[/red] {display_name}: {e}")
+                    console.print(f"  [red]Error[/red] {rel_path}: {e}")
 
             elif item.status == "modified":
                 config = local.get(auto_id, {})
                 push_config = {k: v for k, v in config.items() if not k.startswith("_")}
-                display_name = config.get("alias", auto_id)
+                alias = config.get("alias", "")
                 current_filename = config.get("_filename", "")
+                file_path = self.local_path / (current_filename or filename_from_name(alias, auto_id))
+                rel_path = relative_path(file_path)
 
                 try:
                     if dry_run:
-                        console.print(f"  [cyan]Would update[/cyan] {display_name}")
+                        console.print(f"  [cyan]Would update[/cyan] {rel_path}")
                         result.updated.append(auto_id)
                     else:
                         await self.client.save_automation_config(auto_id, push_config)
                         result.updated.append(auto_id)
-                        console.print(f"  [yellow]Updated[/yellow] {display_name}")
+                        console.print(f"  [yellow]Updated[/yellow] {rel_path}")
 
                     # Check if file should be renamed to match alias
-                    if current_filename and display_name:
-                        expected_filename = filename_from_name(display_name, auto_id)
+                    if current_filename and alias:
+                        expected_filename = filename_from_name(alias, auto_id)
                         if current_filename != expected_filename:
                             old_path = self.local_path / current_filename
                             new_path = self.local_path / expected_filename
@@ -248,21 +253,23 @@ class AutomationSyncer(BaseSyncer):
 
                 except Exception as e:
                     result.errors.append((auto_id, str(e)))
-                    console.print(f"  [red]Error[/red] {display_name}: {e}")
+                    console.print(f"  [red]Error[/red] {rel_path}: {e}")
 
             elif item.status == "deleted" and sync_deletions:
-                display_name = item.remote.get("alias", auto_id) if item.remote else auto_id
+                alias = item.remote.get("alias", "") if item.remote else ""
+                file_path = self.local_path / filename_from_name(alias, auto_id)
+                rel_path = relative_path(file_path)
                 try:
                     if dry_run:
-                        console.print(f"  [cyan]Would delete[/cyan] {display_name}")
+                        console.print(f"  [cyan]Would delete[/cyan] {rel_path}")
                         result.deleted.append(auto_id)
                     else:
                         await self.client.delete_automation(auto_id)
                         result.deleted.append(auto_id)
-                        console.print(f"  [red]Deleted[/red] {display_name}")
+                        console.print(f"  [red]Deleted[/red] {rel_path}")
                 except Exception as e:
                     result.errors.append((auto_id, str(e)))
-                    console.print(f"  [red]Error deleting[/red] {display_name}: {e}")
+                    console.print(f"  [red]Error deleting[/red] {rel_path}: {e}")
 
         # Reload automations if we made changes
         if not dry_run and result.has_changes:
@@ -278,12 +285,17 @@ class AutomationSyncer(BaseSyncer):
                 try:
                     old_path.rename(new_path)
                     result.renamed.append((old_path.name, new_path.name))
-                    console.print(f"  [blue]Renamed[/blue] {old_path.name} -> {new_path.name}")
+                    old_rel = relative_path(old_path)
+                    new_rel = relative_path(new_path)
+                    console.print(f"  [blue]Renamed[/blue] {old_rel} -> {new_rel}")
                 except Exception as e:
-                    console.print(f"  [red]Error renaming[/red] {old_path.name}: {e}")
+                    old_rel = relative_path(old_path)
+                    console.print(f"  [red]Error renaming[/red] {old_rel}: {e}")
         elif files_to_rename:
             for old_path, new_path in files_to_rename:
-                console.print(f"  [cyan]Would rename[/cyan] {old_path.name} -> {new_path.name}")
+                old_rel = relative_path(old_path)
+                new_rel = relative_path(new_path)
+                console.print(f"  [cyan]Would rename[/cyan] {old_rel} -> {new_rel}")
 
         # Warn about remote items without local counterpart
         if not sync_deletions:

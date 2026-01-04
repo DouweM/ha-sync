@@ -10,7 +10,7 @@ from rich.console import Console
 from ha_sync.client import HAClient
 from ha_sync.config import SyncConfig
 from ha_sync.models import BaseEntityModel
-from ha_sync.utils import dump_yaml, filename_from_id, id_from_filename, load_yaml
+from ha_sync.utils import dump_yaml, filename_from_id, id_from_filename, load_yaml, relative_path
 
 console = Console()
 
@@ -194,8 +194,8 @@ class SimpleEntitySyncer(BaseSyncer):
         for entity_id, config in remote.items():
             config = self.ensure_id_in_config(entity_id, config)
             ordered = self.normalize(config)
-            display_name = self.get_display_name(entity_id, config)
             file_path = self.local_path / self.get_filename(entity_id, config)
+            rel_path = relative_path(file_path)
 
             if entity_id in local:
                 local_config = self.clean_config(local[entity_id])
@@ -203,11 +203,11 @@ class SimpleEntitySyncer(BaseSyncer):
                 if ordered != local_normalized:
                     dump_yaml(ordered, file_path)
                     result.updated.append(entity_id)
-                    console.print(f"  [yellow]Updated[/yellow] {display_name}")
+                    console.print(f"  [yellow]Updated[/yellow] {rel_path}")
             else:
                 dump_yaml(ordered, file_path)
                 result.created.append(entity_id)
-                console.print(f"  [green]Created[/green] {display_name}")
+                console.print(f"  [green]Created[/green] {rel_path}")
 
         if sync_deletions:
             for entity_id, local_data in local.items():
@@ -217,8 +217,8 @@ class SimpleEntitySyncer(BaseSyncer):
                     if file_path.exists():
                         file_path.unlink()
                         result.deleted.append(entity_id)
-                        display_name = self.get_display_name(entity_id, local_data)
-                        console.print(f"  [red]Deleted[/red] {display_name}")
+                        rel_path = relative_path(file_path)
+                        console.print(f"  [red]Deleted[/red] {rel_path}")
         else:
             orphaned = [eid for eid in local if eid not in remote]
             if orphaned:
@@ -238,20 +238,37 @@ class SimpleEntitySyncer(BaseSyncer):
         """Push local entities to Home Assistant."""
         result = SyncResult(created=[], updated=[], deleted=[], renamed=[], errors=[])
 
-        remote = await self.get_remote_entities()
         local = self.get_local_entities()
-        renames = self.detect_renames(remote)
+        remote = await self.get_remote_entities()
 
-        # Process renames first
-        for old_id, new_id in renames.items():
+        # Get diff to determine what needs syncing
+        diff_items = await self.diff()
+
+        # Track processed items to avoid double-processing
+        processed_ids: set[str] = set()
+
+        # Process renames first (always, regardless of force)
+        for item in diff_items:
+            if item.status != "renamed" or not item.new_id:
+                continue
+
+            old_id = item.entity_id
+            new_id = item.new_id
+            processed_ids.add(old_id)
+            processed_ids.add(new_id)
+
+            old_file = self.local_path / filename_from_id(old_id)
+            new_file = self.local_path / filename_from_id(new_id)
+            old_rel_path = relative_path(old_file)
+            new_rel_path = relative_path(new_file)
+
             if dry_run:
-                console.print(f"  [cyan]Would rename[/cyan] {old_id} -> {new_id}")
+                console.print(f"  [cyan]Would rename[/cyan] {old_rel_path} -> {new_rel_path}")
                 result.renamed.append((old_id, new_id))
                 continue
 
             try:
-                yaml_file = self.local_path / filename_from_id(old_id)
-                config = load_yaml(yaml_file)
+                config = load_yaml(old_file)
                 if not config:
                     continue
 
@@ -262,69 +279,97 @@ class SimpleEntitySyncer(BaseSyncer):
                 await self.save_remote(new_id, push_config)
 
                 # Rename local file
-                new_file = self.local_path / filename_from_id(new_id)
-                yaml_file.rename(new_file)
+                old_file.rename(new_file)
 
                 result.renamed.append((old_id, new_id))
-                console.print(f"  [blue]Renamed[/blue] {old_id} -> {new_id}")
-
-                # Update tracking
-                remote.pop(old_id, None)
-                local[new_id] = local.pop(old_id, config)
+                console.print(f"  [blue]Renamed[/blue] {old_rel_path} -> {new_rel_path}")
 
             except Exception as e:
                 result.errors.append((old_id, str(e)))
-                console.print(f"  [red]Error renaming[/red] {old_id}: {e}")
+                console.print(f"  [red]Error renaming[/red] {old_rel_path}: {e}")
+
+        # Determine items to create/update
+        if force:
+            # Force mode: all local items not already processed
+            items_to_process = [
+                (eid, local[eid])
+                for eid in local
+                if eid not in processed_ids
+            ]
+        else:
+            # Normal mode: only items from diff (added or modified)
+            items_to_process = [
+                (item.entity_id, local[item.entity_id])
+                for item in diff_items
+                if item.status in ("added", "modified") and item.entity_id in local
+            ]
 
         # Process creates and updates
-        for entity_id, config in local.items():
-            if entity_id in [r[0] for r in renames.items()]:
-                continue
-
+        for entity_id, config in items_to_process:
             push_config = self.clean_config(config)
-            display_name = self.get_display_name(entity_id, config)
+            filename = config.get("_filename", self.get_filename(entity_id, config))
+            file_path = self.local_path / filename
+            rel_path = relative_path(file_path)
+
+            is_update = entity_id in remote
 
             try:
-                if entity_id in remote:
-                    if dry_run:
-                        console.print(f"  [cyan]Would update[/cyan] {display_name}")
-                        result.updated.append(entity_id)
-                        continue
+                if dry_run:
+                    action = "Would update" if is_update else "Would create"
+                    console.print(f"  [cyan]{action}[/cyan] {rel_path}")
+                    (result.updated if is_update else result.created).append(entity_id)
+                    continue
 
-                    await self.save_remote(entity_id, push_config)
-                    result.updated.append(entity_id)
-                    console.print(f"  [yellow]Updated[/yellow] {display_name}")
-                else:
-                    if dry_run:
-                        console.print(f"  [cyan]Would create[/cyan] {display_name}")
-                        result.created.append(entity_id)
-                        continue
-
-                    await self.save_remote(entity_id, push_config)
-                    result.created.append(entity_id)
-                    console.print(f"  [green]Created[/green] {display_name}")
+                await self.save_remote(entity_id, push_config)
+                (result.updated if is_update else result.created).append(entity_id)
+                action = "Updated" if is_update else "Created"
+                color = "yellow" if is_update else "green"
+                console.print(f"  [{color}]{action}[/{color}] {rel_path}")
 
             except Exception as e:
                 result.errors.append((entity_id, str(e)))
-                console.print(f"  [red]Error[/red] {display_name}: {e}")
+                console.print(f"  [red]Error[/red] {rel_path}: {e}")
 
         # Process deletions
         if sync_deletions:
-            for entity_id in remote:
-                if entity_id not in local and entity_id not in renames:
-                    display_name = self.get_display_name(entity_id, remote[entity_id])
-                    try:
-                        if dry_run:
-                            console.print(f"  [cyan]Would delete[/cyan] {display_name}")
-                            result.deleted.append(entity_id)
-                            continue
+            if force:
+                # Force mode: delete all remote items not in local
+                items_to_delete = [
+                    eid for eid in remote
+                    if eid not in local and eid not in processed_ids
+                ]
+            else:
+                # Normal mode: only items from diff
+                items_to_delete = [
+                    item.entity_id
+                    for item in diff_items
+                    if item.status == "deleted"
+                ]
 
-                        await self.delete_remote(entity_id)
+            for entity_id in items_to_delete:
+                filename = self.get_filename(entity_id, remote.get(entity_id, {}))
+                file_path = self.local_path / filename
+                rel_path = relative_path(file_path)
+                try:
+                    if dry_run:
+                        console.print(f"  [cyan]Would delete[/cyan] {rel_path}")
                         result.deleted.append(entity_id)
-                        console.print(f"  [red]Deleted[/red] {display_name}")
-                    except Exception as e:
-                        result.errors.append((entity_id, str(e)))
-                        console.print(f"  [red]Error deleting[/red] {display_name}: {e}")
+                        continue
+
+                    await self.delete_remote(entity_id)
+                    result.deleted.append(entity_id)
+                    console.print(f"  [red]Deleted[/red] {rel_path}")
+                except Exception as e:
+                    result.errors.append((entity_id, str(e)))
+                    console.print(f"  [red]Error deleting[/red] {rel_path}: {e}")
+        else:
+            # Warn about remote items without local counterpart
+            orphaned = [eid for eid in remote if eid not in local and eid not in processed_ids]
+            if orphaned:
+                console.print(
+                    f"  [dim]{len(orphaned)} remote item(s) not in local files "
+                    "(use --sync-deletions to remove)[/dim]"
+                )
 
         # Reload if changes were made
         if not dry_run and result.has_changes:
@@ -333,15 +378,6 @@ class SimpleEntitySyncer(BaseSyncer):
                 console.print(f"  [dim]Reloaded {self.entity_type}s[/dim]")
             except Exception as e:
                 console.print(f"  [red]Error reloading[/red]: {e}")
-
-        # Warn about remote items without local counterpart
-        if not sync_deletions:
-            orphaned = [eid for eid in remote if eid not in local and eid not in renames]
-            if orphaned:
-                console.print(
-                    f"  [dim]{len(orphaned)} remote item(s) not in local files "
-                    "(use --sync-deletions to remove)[/dim]"
-                )
 
         return result
 
