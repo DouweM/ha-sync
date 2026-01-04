@@ -1,0 +1,26 @@
+{
+  "permissions": {
+    "allow": [
+      "WebSearch",
+      "WebFetch(domain:developers.home-assistant.io)",
+      "WebFetch(domain:github.com)",
+      "WebFetch(domain:community.home-assistant.io)",
+      "WebFetch(domain:deepwiki.com)",
+      "WebFetch(domain:gist.github.com)",
+      "WebFetch(domain:pypi.org)",
+      "WebFetch(domain:homeassistantapi.readthedocs.io)",
+      "Bash(uv run pyright:*)",
+      "Bash(uv add:*)",
+      "Bash(uv run ruff:*)",
+      "Bash(uv run ruff format:*)",
+      "Bash(uv run pytest:*)",
+      "Bash(uv run ha --help:*)",
+      "Bash(uv run:*)",
+      "Bash(cat:*)",
+      "Bash(uv sync:*)",
+      "Bash(ls:*)",
+      "Bash(grep:*)",
+      "WebFetch(domain:www.home-assistant.io)"
+    ]
+  }
+}
