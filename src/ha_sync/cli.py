@@ -1404,6 +1404,11 @@ def sync(
                 console.print("[dim]Aborted[/dim]")
                 raise typer.Exit(0)
 
+        # Quick check: any uncommitted changes in managed folders?
+        from ha_sync.utils import git_has_changes
+
+        has_local_changes = git_has_changes(MANAGED_FOLDERS) if in_git else True
+
         # Step 1: Show remote changes (will be pulled first)
         console.print("[bold]Remote changes (will be pulled):[/bold]\n")
         pull_diff = asyncio.run(_get_pull_diff(config, path, sync_deletions))
@@ -1413,16 +1418,20 @@ def sync(
         else:
             console.print("[dim]No remote changes[/dim]\n")
 
-        # Step 2: Show local uncommitted changes (will be merged and pushed)
-        console.print("[bold]Your uncommitted changes (will be pushed after merge):[/bold]\n")
-        push_diff = asyncio.run(
-            _get_push_diff(config, path, all_items=False, sync_deletions=sync_deletions)
-        )
-
-        if push_diff:
-            _display_diff_items(push_diff, direction="push")
+        # Step 2: Check local uncommitted changes
+        # Only compute full diff if git shows uncommitted changes (fast path)
+        push_diff: list[DiffItem] = []
+        if has_local_changes:
+            console.print("[bold]Your uncommitted changes (will be pushed after merge):[/bold]\n")
+            push_diff = asyncio.run(
+                _get_push_diff(config, path, all_items=False, sync_deletions=sync_deletions)
+            )
+            if push_diff:
+                _display_diff_items(push_diff, direction="push")
+            else:
+                console.print("[dim]No local changes[/dim]\n")
         else:
-            console.print("[dim]No local changes[/dim]\n")
+            console.print("[dim]No uncommitted changes[/dim]\n")
 
         # If nothing to do, exit early
         if not pull_diff and not push_diff:
