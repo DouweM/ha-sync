@@ -208,6 +208,7 @@ class TemplateSensor(BaseEntityModel):
     """Template sensor helper."""
 
     entry_id: str
+    id: str | None = None  # Entity ID (e.g., sensor.my_template) - optional, for renaming
     name: str
     step_id: Literal["sensor"] = "sensor"
     state: str  # Template string
@@ -222,6 +223,7 @@ class TemplateBinarySensor(BaseEntityModel):
     """Template binary sensor helper."""
 
     entry_id: str
+    id: str | None = None  # Entity ID (e.g., binary_sensor.my_template) - optional, for renaming
     name: str
     step_id: Literal["binary_sensor"] = "binary_sensor"
     state: str  # Template string
@@ -234,6 +236,7 @@ class TemplateSwitch(BaseEntityModel):
     """Template switch helper."""
 
     entry_id: str
+    id: str | None = None  # Entity ID (e.g., switch.my_template) - optional, for renaming
     name: str
     step_id: Literal["switch"] = "switch"
     value_template: str | None = None
@@ -247,6 +250,7 @@ class GroupBinarySensor(BaseEntityModel):
     """Group binary sensor helper."""
 
     entry_id: str
+    id: str | None = None  # Entity ID (e.g., binary_sensor.all_motion) - optional, for renaming
     name: str
     step_id: Literal["binary_sensor"] = "binary_sensor"
     entities: list[str] = Field(default_factory=list)
@@ -258,6 +262,7 @@ class GroupSensor(BaseEntityModel):
     """Group sensor helper."""
 
     entry_id: str
+    id: str | None = None  # Entity ID (e.g., sensor.average_temp) - optional, for renaming
     name: str
     step_id: Literal["sensor"] = "sensor"
     entities: list[str] = Field(default_factory=list)
@@ -269,6 +274,7 @@ class GroupLight(BaseEntityModel):
     """Group light helper."""
 
     entry_id: str
+    id: str | None = None  # Entity ID (e.g., light.all_lights) - optional, for renaming
     name: str
     step_id: Literal["light"] = "light"
     entities: list[str] = Field(default_factory=list)
@@ -348,6 +354,7 @@ class IntegrationHelper(BaseEntityModel):
     """Integration helper (Riemann sum integral - converts power to energy)."""
 
     entry_id: str
+    id: str | None = None  # Entity ID (e.g., sensor.energy_total) - optional, for renaming
     name: str
     source: str  # Source sensor entity_id
     method: str = "trapezoidal"  # left, right, trapezoidal
@@ -359,6 +366,7 @@ class UtilityMeterHelper(BaseEntityModel):
     """Utility meter helper (tracks consumption over time periods)."""
 
     entry_id: str
+    id: str | None = None  # Entity ID (e.g., sensor.electricity_daily) - optional, for renaming
     name: str
     source: str  # Source sensor entity_id
     cycle: str | None = None  # hourly, daily, weekly, monthly, quarterly, yearly
@@ -374,6 +382,7 @@ class ThresholdHelper(BaseEntityModel):
     """Threshold helper (binary sensor based on numeric threshold)."""
 
     entry_id: str
+    id: str | None = None  # Entity ID (e.g., binary_sensor.motion_detected) - for renaming
     name: str
     entity_id: str  # Source entity to monitor
     hysteresis: float = 0.0
@@ -385,6 +394,7 @@ class TodHelper(BaseEntityModel):
     """Time of Day helper (binary sensor for time periods)."""
 
     entry_id: str
+    id: str | None = None  # Entity ID (e.g., binary_sensor.daytime) - optional, for renaming
     name: str
     after_time: str  # HH:MM:SS format
     before_time: str  # HH:MM:SS format

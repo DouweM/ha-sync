@@ -1,5 +1,6 @@
 """Group helper sync implementation (config entry-based helpers)."""
 
+import asyncio
 import logging
 from pathlib import Path
 from typing import Any
@@ -33,6 +34,7 @@ class GroupSyncer(BaseSyncer):
 
     def __init__(self, client: HAClient, config: SyncConfig) -> None:
         super().__init__(client, config)
+        self._entity_registry_cache: dict[str, list[dict[str, Any]]] | None = None
 
     @property
     def local_path(self) -> Path:
@@ -45,6 +47,86 @@ class GroupSyncer(BaseSyncer):
     def _get_model_for_subtype(self, subtype: str) -> type | None:
         """Get the Pydantic model for a subtype."""
         return GROUP_HELPER_MODELS.get(subtype)
+
+    def _expand_entity_id(self, entity_id: str, subtype: str) -> str:
+        """Expand a suffix-only entity_id to full form.
+
+        For group helpers, the entity domain matches the subtype (step_id).
+        """
+        if "." in entity_id:
+            return entity_id
+        return f"{subtype}.{entity_id}"
+
+    def _validate_entity_id(self, entity_id: str, subtype: str) -> str | None:
+        """Validate entity_id domain prefix matches expected domain."""
+        if "." not in entity_id:
+            return None  # Will be expanded, no validation needed
+
+        actual_domain = entity_id.split(".")[0]
+        if actual_domain != subtype:
+            return (
+                f"Invalid entity_id domain '{actual_domain}' for group {subtype}. "
+                f"Expected '{subtype}'."
+            )
+        return None
+
+    async def _get_entity_registry_for_entry(
+        self, entry_id: str
+    ) -> list[dict[str, Any]]:
+        """Get entity registry entries for a config entry (with caching)."""
+        if self._entity_registry_cache is None:
+            all_entities = await self.client.get_entity_registry()
+            self._entity_registry_cache = {}
+            for entity in all_entities:
+                config_entry_id = entity.get("config_entry_id")
+                if config_entry_id:
+                    if config_entry_id not in self._entity_registry_cache:
+                        self._entity_registry_cache[config_entry_id] = []
+                    self._entity_registry_cache[config_entry_id].append(entity)
+
+        return self._entity_registry_cache.get(entry_id, [])
+
+    def _invalidate_entity_registry_cache(self) -> None:
+        """Invalidate the entity registry cache."""
+        self._entity_registry_cache = None
+
+    async def _update_entity_id(
+        self,
+        entry_id: str,
+        local_id: str,
+        subtype: str,
+        dry_run: bool = False,
+    ) -> tuple[str, str] | None:
+        """Update entity_id if it differs from local config."""
+        local_id = self._expand_entity_id(local_id, subtype)
+
+        error = self._validate_entity_id(local_id, subtype)
+        if error:
+            console.print(f"    [red]Error[/red] {error}")
+            return None
+
+        entity_entries = await self._get_entity_registry_for_entry(entry_id)
+        if not entity_entries:
+            return None
+
+        current_id = entity_entries[0].get("entity_id")
+        if not current_id or current_id == local_id:
+            return None
+
+        if dry_run:
+            console.print(f"    [cyan]Would rename[/cyan] {current_id} -> {local_id}")
+        else:
+            try:
+                await self.client.update_entity_registry(
+                    current_id, new_entity_id=local_id
+                )
+                console.print(f"    [blue]Renamed[/blue] {current_id} -> {local_id}")
+                self._invalidate_entity_registry_cache()
+            except Exception as e:
+                console.print(f"    [red]Error renaming[/red] {current_id}: {e}")
+                return None
+
+        return (current_id, local_id)
 
     @logfire.instrument("Fetch remote groups")
     async def get_remote_entities(self) -> dict[str, dict[str, Any]]:
@@ -65,6 +147,11 @@ class GroupSyncer(BaseSyncer):
                         "Please report this at https://github.com/DouweM/ha-sync/issues"
                     )
                     console.print(f"  [yellow]Warning:[/yellow] Unknown group type '{step_id}'")
+
+                # Fetch entity_id from entity registry
+                entity_entries = await self._get_entity_registry_for_entry(entry_id)
+                if entity_entries:
+                    helper["id"] = entity_entries[0].get("entity_id")
 
                 result[f"{step_id}/{entry_id}"] = {
                     "subtype": step_id,
@@ -240,6 +327,9 @@ class GroupSyncer(BaseSyncer):
         """Push local group helpers to Home Assistant."""
         result = SyncResult(created=[], updated=[], deleted=[], renamed=[], errors=[])
 
+        # Invalidate entity registry cache for fresh data
+        self._invalidate_entity_registry_cache()
+
         local = self.get_local_entities()
         remote = await self.get_remote_entities()
 
@@ -262,10 +352,11 @@ class GroupSyncer(BaseSyncer):
         for full_id, data in items_to_process:
             subtype = data["subtype"]
             entry_id: str | None = data.get("entry_id")
+            local_id = data.get("id")  # Desired entity_id from local config
             name = data.get("name", entry_id or full_id)
             current_filename = data.get("_filename")
-            # Remove metadata before sending to HA
-            config = {k: v for k, v in data.items() if k not in ("subtype", "_filename")}
+            # Remove metadata and id before sending to HA (id is for entity registry)
+            config = {k: v for k, v in data.items() if k not in ("subtype", "_filename", "id")}
             file_path = self._subtype_path(subtype) / (
                 current_filename or filename_from_name(name, entry_id or "new")
             )
@@ -279,11 +370,21 @@ class GroupSyncer(BaseSyncer):
                     if dry_run:
                         console.print(f"  [cyan]Would update[/cyan] {rel_path}")
                         result.updated.append(full_id)
+                        if local_id:
+                            await self._update_entity_id(entry_id, local_id, subtype, dry_run=True)  # type: ignore[arg-type]
                         continue
 
                     await self.client.update_group_helper(entry_id, config)  # type: ignore[arg-type]
                     result.updated.append(full_id)
                     console.print(f"  [yellow]Updated[/yellow] {rel_path}")
+
+                    # Handle entity_id renaming if id is specified
+                    if local_id and entry_id:
+                        rename_result = await self._update_entity_id(
+                            entry_id, local_id, subtype, dry_run=False
+                        )
+                        if rename_result:
+                            result.renamed.append(rename_result)
                 else:
                     # Create new entry
                     if dry_run:
@@ -295,8 +396,10 @@ class GroupSyncer(BaseSyncer):
                     result.created.append(full_id)
                     console.print(f"  [green]Created[/green] {rel_path}")
 
-                    # Update local file with new entry_id
+                    # Update local file with new entry_id (preserve id if set)
                     config["entry_id"] = new_entry_id
+                    if local_id:
+                        config["id"] = local_id
                     new_filename = filename_from_name(name, new_entry_id)
                     new_file_path = self._subtype_path(subtype) / new_filename
 
@@ -307,6 +410,16 @@ class GroupSyncer(BaseSyncer):
                         old_path = self._subtype_path(subtype) / current_filename
                         if old_path.exists():
                             old_path.unlink()
+
+                    # Handle entity_id renaming for new entries
+                    if local_id:
+                        await asyncio.sleep(0.5)  # Brief wait for HA to create entity
+                        self._invalidate_entity_registry_cache()
+                        rename_result = await self._update_entity_id(
+                            new_entry_id, local_id, subtype, dry_run=False
+                        )
+                        if rename_result:
+                            result.renamed.append(rename_result)
 
             except Exception as e:
                 result.errors.append((full_id, str(e)))

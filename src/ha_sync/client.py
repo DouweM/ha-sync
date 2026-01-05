@@ -867,6 +867,82 @@ class HAClient:
         """Delete a time of day helper."""
         await self.delete_config_entry(entry_id)
 
+    # --- Entity Registry Commands ---
+
+    @logfire.instrument("Get entity registry")
+    async def get_entity_registry(self) -> list[dict[str, Any]]:
+        """Get all entity registry entries."""
+        result = await self.send_command("config/entity_registry/list")
+        return result if isinstance(result, list) else []
+
+    @logfire.instrument("Get entity registry entry: {entity_id}")
+    async def get_entity_registry_entry(self, entity_id: str) -> dict[str, Any] | None:
+        """Get a single entity registry entry by entity_id."""
+        try:
+            result = await self.send_command(
+                "config/entity_registry/get", entity_id=entity_id
+            )
+            return result if isinstance(result, dict) else None
+        except Exception:
+            return None
+
+    @logfire.instrument("Update entity registry: {entity_id}")
+    async def update_entity_registry(
+        self,
+        entity_id: str,
+        *,
+        new_entity_id: str | None = None,
+        name: str | None = None,
+        icon: str | None = None,
+        disabled_by: str | None = None,
+        hidden_by: str | None = None,
+        area_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Update an entity registry entry.
+
+        Args:
+            entity_id: Current entity_id to update
+            new_entity_id: New entity_id (for renaming)
+            name: Custom name override
+            icon: Custom icon override
+            disabled_by: Disable reason or None to enable
+            hidden_by: Hide reason or None to show
+            area_id: Area ID to assign
+
+        Returns:
+            Updated entity registry entry
+        """
+        kwargs: dict[str, Any] = {"entity_id": entity_id}
+        if new_entity_id is not None:
+            kwargs["new_entity_id"] = new_entity_id
+        if name is not None:
+            kwargs["name"] = name
+        if icon is not None:
+            kwargs["icon"] = icon
+        if disabled_by is not None:
+            kwargs["disabled_by"] = disabled_by
+        if hidden_by is not None:
+            kwargs["hidden_by"] = hidden_by
+        if area_id is not None:
+            kwargs["area_id"] = area_id
+
+        result = await self.send_command("config/entity_registry/update", **kwargs)
+        return result if isinstance(result, dict) else {}
+
+    async def get_entities_for_config_entry(
+        self, entry_id: str
+    ) -> list[dict[str, Any]]:
+        """Get all entity registry entries for a config entry.
+
+        Args:
+            entry_id: Config entry ID
+
+        Returns:
+            List of entity registry entries with matching config_entry_id
+        """
+        all_entities = await self.get_entity_registry()
+        return [e for e in all_entities if e.get("config_entry_id") == entry_id]
+
     # --- Utility Methods ---
 
     @logfire.instrument("Check HA config")

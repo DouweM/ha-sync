@@ -5,6 +5,7 @@ that don't have explicit model definitions. It auto-discovers helpers
 by domain and syncs them to/from local files.
 """
 
+import asyncio
 import logging
 from pathlib import Path
 from typing import Any
@@ -62,6 +63,26 @@ HELPER_MODELS: dict[str, type[BaseEntityModel]] = {
     "tod": TodHelper,
 }
 
+# Map helper domain -> entity domain for entity_id expansion/validation
+# Used when user provides just the suffix (e.g., "my_thermostat" -> "climate.my_thermostat")
+ENTITY_DOMAIN_MAP: dict[str, str] = {
+    "integration": "sensor",
+    "utility_meter": "sensor",
+    "threshold": "binary_sensor",
+    "tod": "binary_sensor",
+    "derivative": "sensor",
+    "min_max": "sensor",
+    "filter": "sensor",
+    "statistics": "sensor",
+    "generic_thermostat": "climate",
+    "generic_hygrostat": "humidifier",
+    "bayesian": "binary_sensor",
+    "trend": "binary_sensor",
+    "random": "sensor",  # Can also be binary_sensor
+    "mold_indicator": "sensor",
+    "switch_as_x": "light",  # Can be various types
+}
+
 
 class ConfigEntrySyncer(BaseSyncer):
     """Generic syncer for any config entry-based helper type.
@@ -80,6 +101,7 @@ class ConfigEntrySyncer(BaseSyncer):
         super().__init__(client, config)
         self.domain = domain
         self.entity_type = entity_type_override or domain
+        self._entity_registry_cache: dict[str, list[dict[str, Any]]] | None = None
 
     @property
     def local_path(self) -> Path:
@@ -89,16 +111,99 @@ class ConfigEntrySyncer(BaseSyncer):
         """Get the Pydantic model for this domain, if available."""
         return HELPER_MODELS.get(self.domain)
 
+    def _get_entity_domain(self) -> str | None:
+        """Get the expected entity domain for this helper type."""
+        return ENTITY_DOMAIN_MAP.get(self.domain)
+
+    def _expand_entity_id(self, entity_id: str) -> str:
+        """Expand a suffix-only entity_id to full form.
+
+        Args:
+            entity_id: Either full entity_id (e.g., "climate.my_thermostat")
+                      or just suffix (e.g., "my_thermostat")
+
+        Returns:
+            Full entity_id with domain prefix
+        """
+        if "." in entity_id:
+            return entity_id
+        entity_domain = self._get_entity_domain()
+        if entity_domain:
+            return f"{entity_domain}.{entity_id}"
+        return entity_id
+
+    def _validate_entity_id(self, entity_id: str) -> str | None:
+        """Validate entity_id domain prefix matches expected domain.
+
+        Args:
+            entity_id: Full entity_id to validate
+
+        Returns:
+            Error message if invalid, None if valid
+        """
+        if "." not in entity_id:
+            return None  # Will be expanded, no validation needed
+
+        expected_domain = self._get_entity_domain()
+        if not expected_domain:
+            return None  # Unknown helper type, can't validate
+
+        actual_domain = entity_id.split(".")[0]
+        if actual_domain != expected_domain:
+            return (
+                f"Invalid entity_id domain '{actual_domain}' for {self.domain} helper. "
+                f"Expected '{expected_domain}'."
+            )
+        return None
+
     def _normalize(self, data: dict[str, Any]) -> dict[str, Any]:
-        """Normalize data through model if available, otherwise pass through."""
+        """Normalize data through model if available, otherwise pass through.
+
+        Also expands suffix-only `id` to full entity_id format.
+        """
+        # Expand id if present and is suffix-only
+        if "id" in data and data["id"] is not None:
+            data = dict(data)
+            data["id"] = self._expand_entity_id(data["id"])
+
         model = self._get_model()
         if model:
             try:
                 return model.normalize(data)
             except Exception:
                 pass
-        # For unknown domains, just ensure entry_id is first and remove None values
-        return {k: v for k, v in data.items() if v is not None}
+        # For unknown domains, ensure proper ordering and remove None values
+        result: dict[str, Any] = {}
+        # Priority fields first
+        for key in ["entry_id", "id", "name"]:
+            if key in data and data[key] is not None:
+                result[key] = data[key]
+        # Then remaining fields
+        for k, v in data.items():
+            if k not in result and v is not None:
+                result[k] = v
+        return result
+
+    async def _get_entity_registry_for_entry(
+        self, entry_id: str
+    ) -> list[dict[str, Any]]:
+        """Get entity registry entries for a config entry (with caching)."""
+        if self._entity_registry_cache is None:
+            # Build cache on first access
+            all_entities = await self.client.get_entity_registry()
+            self._entity_registry_cache = {}
+            for entity in all_entities:
+                config_entry_id = entity.get("config_entry_id")
+                if config_entry_id:
+                    if config_entry_id not in self._entity_registry_cache:
+                        self._entity_registry_cache[config_entry_id] = []
+                    self._entity_registry_cache[config_entry_id].append(entity)
+
+        return self._entity_registry_cache.get(entry_id, [])
+
+    def _invalidate_entity_registry_cache(self) -> None:
+        """Invalidate the entity registry cache."""
+        self._entity_registry_cache = None
 
     async def _get_helpers(self) -> list[dict[str, Any]]:
         """Get all helpers of this domain from Home Assistant."""
@@ -108,10 +213,73 @@ class ConfigEntrySyncer(BaseSyncer):
             try:
                 config = await self.client.get_config_entry_options(entry["entry_id"])
                 config["name"] = entry.get("title", "")
+
+                # Fetch entity_id from entity registry
+                entity_entries = await self._get_entity_registry_for_entry(
+                    entry["entry_id"]
+                )
+                if len(entity_entries) == 1:
+                    # Single entity - set the id field
+                    config["id"] = entity_entries[0].get("entity_id")
+                elif len(entity_entries) > 1:
+                    # Multiple entities (e.g., utility_meter with tariffs)
+                    # Use the first one as primary id
+                    config["id"] = entity_entries[0].get("entity_id")
+
                 result.append(config)
             except Exception:
                 pass
         return result
+
+    async def _update_entity_id(
+        self,
+        entry_id: str,
+        local_id: str,
+        dry_run: bool = False,
+    ) -> tuple[str, str] | None:
+        """Update entity_id if it differs from local config.
+
+        Args:
+            entry_id: The config entry ID
+            local_id: The desired entity_id from local config
+            dry_run: If True, only print what would happen
+
+        Returns:
+            Tuple of (old_id, new_id) if renamed, None otherwise
+        """
+        # Expand the local_id to full form
+        local_id = self._expand_entity_id(local_id)
+
+        # Validate domain
+        error = self._validate_entity_id(local_id)
+        if error:
+            console.print(f"    [red]Error[/red] {error}")
+            return None
+
+        # Get current entity from registry
+        entity_entries = await self._get_entity_registry_for_entry(entry_id)
+        if not entity_entries:
+            return None
+
+        # Check first entity (primary entity for multi-entity helpers)
+        current_id = entity_entries[0].get("entity_id")
+        if not current_id or current_id == local_id:
+            return None
+
+        if dry_run:
+            console.print(f"    [cyan]Would rename[/cyan] {current_id} -> {local_id}")
+        else:
+            try:
+                await self.client.update_entity_registry(
+                    current_id, new_entity_id=local_id
+                )
+                console.print(f"    [blue]Renamed[/blue] {current_id} -> {local_id}")
+                self._invalidate_entity_registry_cache()
+            except Exception as e:
+                console.print(f"    [red]Error renaming[/red] {current_id}: {e}")
+                return None
+
+        return (current_id, local_id)
 
     @logfire.instrument("Fetch remote {self.domain} helpers")
     async def get_remote_entities(self) -> dict[str, dict[str, Any]]:
@@ -253,6 +421,9 @@ class ConfigEntrySyncer(BaseSyncer):
         """Push local helpers to Home Assistant."""
         result = SyncResult(created=[], updated=[], deleted=[], renamed=[], errors=[])
 
+        # Invalidate entity registry cache for fresh data
+        self._invalidate_entity_registry_cache()
+
         local = self.get_local_entities()
         remote = await self.get_remote_entities()
 
@@ -273,9 +444,10 @@ class ConfigEntrySyncer(BaseSyncer):
 
         for entry_id, data in items_to_process:
             name = data.get("name", entry_id)
+            local_id = data.get("id")  # Desired entity_id from local config
             current_filename = data.get("_filename")
-            # Remove _filename before sending to HA
-            config = {k: v for k, v in data.items() if k != "_filename"}
+            # Remove _filename and id before sending to HA (id is for entity registry)
+            config = {k: v for k, v in data.items() if k not in ("_filename", "id")}
             file_path = self.local_path / (current_filename or filename_from_name(name, entry_id))
             rel_path = relative_path(file_path)
 
@@ -286,11 +458,22 @@ class ConfigEntrySyncer(BaseSyncer):
                     if dry_run:
                         console.print(f"  [cyan]Would update[/cyan] {rel_path}")
                         result.updated.append(entry_id)
+                        # Check entity_id rename in dry_run mode too
+                        if local_id:
+                            await self._update_entity_id(entry_id, local_id, dry_run=True)
                         continue
 
                     await self.client.update_config_entry(entry_id, config)
                     result.updated.append(entry_id)
                     console.print(f"  [yellow]Updated[/yellow] {rel_path}")
+
+                    # Handle entity_id renaming if id is specified
+                    if local_id:
+                        rename_result = await self._update_entity_id(
+                            entry_id, local_id, dry_run=False
+                        )
+                        if rename_result:
+                            result.renamed.append(rename_result)
                 else:
                     if dry_run:
                         console.print(f"  [cyan]Would create[/cyan] {rel_path}")
@@ -301,18 +484,30 @@ class ConfigEntrySyncer(BaseSyncer):
                     result.created.append(entry_id)
                     console.print(f"  [green]Created[/green] {rel_path}")
 
-                    # Update local file with new entry_id
+                    # Update local file with new entry_id (preserve id if set)
                     config["entry_id"] = new_entry_id
+                    if local_id:
+                        config["id"] = local_id
                     new_filename = filename_from_name(name, new_entry_id)
                     new_file_path = self.local_path / new_filename
 
-                    dump_yaml(config, new_file_path)
+                    dump_yaml(self._normalize(config), new_file_path)
 
                     # Remove old file if filename changed
                     if current_filename and current_filename != new_filename:
                         old_path = self.local_path / current_filename
                         if old_path.exists():
                             old_path.unlink()
+
+                    # Handle entity_id renaming for new entries (wait for entity to be created)
+                    if local_id:
+                        await asyncio.sleep(0.5)  # Brief wait for HA to create entity
+                        self._invalidate_entity_registry_cache()
+                        rename_result = await self._update_entity_id(
+                            new_entry_id, local_id, dry_run=False
+                        )
+                        if rename_result:
+                            result.renamed.append(rename_result)
 
             except Exception as e:
                 result.errors.append((entry_id, str(e)))
