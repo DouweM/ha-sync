@@ -305,7 +305,6 @@ def _validate_impl(
     diff_only: bool,
 ) -> None:
     """Implementation of validate command."""
-    import re
 
     from ha_sync.utils import load_yaml, relative_path
 
@@ -630,7 +629,7 @@ async def _pull(
     async with HAClient(config.url, config.token) as client:
         syncers_with_filters = await get_syncers_for_path(client, config, path)
 
-        for syncer, file_filter in syncers_with_filters:
+        for syncer, _file_filter in syncers_with_filters:
             console.print(f"\n[bold]Pulling {syncer.entity_type}s...[/bold]")
             result = await syncer.pull(sync_deletions=sync_deletions, dry_run=dry_run)
 
@@ -689,7 +688,7 @@ async def _push(
     async with HAClient(config.url, config.token) as client:
         syncers_with_filters = await get_syncers_for_path(client, config, path)
 
-        for syncer, file_filter in syncers_with_filters:
+        for syncer, _file_filter in syncers_with_filters:
             console.print(f"\n[bold]Pushing {syncer.entity_type}s...[/bold]")
             result = await syncer.push(force=force, sync_deletions=sync_deletions, dry_run=dry_run)
 
@@ -757,7 +756,7 @@ async def _diff(config: SyncConfig, path: str | None) -> None:
             "renamed": "blue",
         }
 
-        for entity_type_name, item in sorted(all_items, key=lambda x: (x[1].status, x[0])):
+        for _entity_type_name, item in sorted(all_items, key=lambda x: (x[1].status, x[0])):
             color = status_colors.get(item.status, "white")
             display_path = item.file_path or item.entity_id
 
@@ -843,7 +842,7 @@ async def _watch(config: SyncConfig, path: str | None) -> None:
         async with HAClient(config.url, config.token) as client:
             syncers_with_filters = await get_syncers_for_path(client, config, path)
 
-            for syncer, file_filter in syncers_with_filters:
+            for syncer, _file_filter in syncers_with_filters:
                 # Check if any changed files are in this syncer's path
                 syncer_path = syncer.local_path
                 relevant = any(str(syncer_path) in str(changed_path) for _, changed_path in changes)
@@ -910,7 +909,6 @@ async def _search(
 ) -> None:
     """Search for entities in Home Assistant."""
     import fnmatch
-    import re
 
     async with HAClient(config.url, config.token) as client:
         all_states = await client.get_all_states()
