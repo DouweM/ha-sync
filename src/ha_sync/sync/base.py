@@ -81,8 +81,12 @@ class BaseSyncer(ABC):
         ...
 
     @abstractmethod
-    async def diff(self) -> list[DiffItem]:
-        """Compare local files with remote state."""
+    async def diff(self, remote: dict[str, dict[str, Any]] | None = None) -> list[DiffItem]:
+        """Compare local files with remote state.
+
+        Args:
+            remote: Optional pre-fetched remote entities. If not provided, will fetch.
+        """
         ...
 
     @abstractmethod
@@ -252,8 +256,8 @@ class SimpleEntitySyncer(BaseSyncer):
             local = self.get_local_entities()
             remote = await self.get_remote_entities()
 
-            # Get diff to determine what needs syncing
-            diff_items = await self.diff()
+            # Get diff to determine what needs syncing (pass remote to avoid re-fetching)
+            diff_items = await self.diff(remote=remote)
 
             # Track processed items to avoid double-processing
             processed_ids: set[str] = set()
@@ -404,12 +408,17 @@ class SimpleEntitySyncer(BaseSyncer):
             )
             return result
 
-    async def diff(self) -> list[DiffItem]:
-        """Compare local entities with remote."""
+    async def diff(self, remote: dict[str, dict[str, Any]] | None = None) -> list[DiffItem]:
+        """Compare local entities with remote.
+
+        Args:
+            remote: Optional pre-fetched remote entities. If not provided, will fetch.
+        """
         with logfire.span("Diff {entity_type}s", entity_type=self.entity_type):
             items: list[DiffItem] = []
 
-            remote = await self.get_remote_entities()
+            if remote is None:
+                remote = await self.get_remote_entities()
             local = self.get_local_entities()
             renames = self.detect_renames(remote)
 

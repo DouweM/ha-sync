@@ -338,8 +338,8 @@ class DashboardSyncer(BaseSyncer):
         local = self.get_local_entities()
         remote = await self.get_remote_entities()
 
-        # Get diff to determine what needs syncing
-        diff_items = await self.diff()
+        # Get diff to determine what needs syncing (pass remote to avoid re-fetching)
+        diff_items = await self.diff(remote=remote)
 
         # Track processed items to avoid double-processing
         processed_dirs: set[str] = set()
@@ -621,11 +621,16 @@ class DashboardSyncer(BaseSyncer):
         return result
 
     @logfire.instrument("Diff dashboards")
-    async def diff(self) -> list[DiffItem]:
-        """Compare local dashboards with remote."""
+    async def diff(self, remote: dict[str, dict[str, Any]] | None = None) -> list[DiffItem]:
+        """Compare local dashboards with remote.
+
+        Args:
+            remote: Optional pre-fetched remote entities. If not provided, will fetch.
+        """
         items: list[DiffItem] = []
 
-        remote = await self.get_remote_entities()
+        if remote is None:
+            remote = await self.get_remote_entities()
         local = self.get_local_entities()
 
         # Detect url_path renames

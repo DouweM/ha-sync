@@ -187,7 +187,8 @@ class AutomationSyncer(BaseSyncer):
                             DiffItem(entity_id=auto_id, status="deleted", remote=remote[auto_id])
                         )
         else:
-            diff_items = await self.diff()
+            # Pass remote to avoid re-fetching
+            diff_items = await self.diff(remote=remote)
             if not diff_items:
                 console.print("  [dim]No changes to push[/dim]")
                 return result
@@ -318,11 +319,16 @@ class AutomationSyncer(BaseSyncer):
         return result
 
     @logfire.instrument("Diff automations")
-    async def diff(self) -> list[DiffItem]:
-        """Compare local automations with remote."""
+    async def diff(self, remote: dict[str, dict[str, Any]] | None = None) -> list[DiffItem]:
+        """Compare local automations with remote.
+
+        Args:
+            remote: Optional pre-fetched remote entities. If not provided, will fetch.
+        """
         items: list[DiffItem] = []
 
-        remote = await self.get_remote_entities()
+        if remote is None:
+            remote = await self.get_remote_entities()
         local = self.get_local_entities()
 
         # Check for additions and modifications

@@ -243,8 +243,8 @@ class GroupSyncer(BaseSyncer):
         local = self.get_local_entities()
         remote = await self.get_remote_entities()
 
-        # Get diff to determine what needs syncing
-        diff_items = await self.diff()
+        # Get diff to determine what needs syncing (pass remote to avoid re-fetching)
+        diff_items = await self.diff(remote=remote)
 
         # Determine items to create/update
         if force:
@@ -354,11 +354,16 @@ class GroupSyncer(BaseSyncer):
         return result
 
     @logfire.instrument("Diff groups")
-    async def diff(self) -> list[DiffItem]:
-        """Compare local group helpers with remote."""
+    async def diff(self, remote: dict[str, dict[str, Any]] | None = None) -> list[DiffItem]:
+        """Compare local group helpers with remote.
+
+        Args:
+            remote: Optional pre-fetched remote entities. If not provided, will fetch.
+        """
         items: list[DiffItem] = []
 
-        remote = await self.get_remote_entities()
+        if remote is None:
+            remote = await self.get_remote_entities()
         local = self.get_local_entities()
 
         for full_id, local_data in local.items():

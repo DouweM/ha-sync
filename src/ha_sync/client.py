@@ -39,6 +39,8 @@ class HAClient:
         self._http_client: httpx.AsyncClient | None = None
         self._msg_id = 0
         self._ha_version: str | None = None
+        # Cache for config entries (avoids redundant API calls during sync)
+        self._config_entries_cache: list[dict[str, Any]] | None = None
 
     @logfire.instrument("Connecting to Home Assistant")
     async def connect(self) -> None:
@@ -150,11 +152,13 @@ class HAClient:
 
     # --- Dashboard (Lovelace) Commands ---
 
+    @logfire.instrument("Get dashboards")
     async def get_dashboards(self) -> list[dict[str, Any]]:
         """List all dashboards."""
         result = await self.send_command("lovelace/dashboards/list")
         return result if isinstance(result, list) else []
 
+    @logfire.instrument("Get dashboard config: {url_path}")
     async def get_dashboard_config(self, url_path: str | None = None) -> dict[str, Any]:
         """Get dashboard configuration."""
         kwargs = {}
@@ -163,6 +167,7 @@ class HAClient:
         result = await self.send_command("lovelace/config", **kwargs)
         return result if isinstance(result, dict) else {}
 
+    @logfire.instrument("Save dashboard config: {url_path}")
     async def save_dashboard_config(
         self, config: dict[str, Any], url_path: str | None = None
     ) -> None:
@@ -172,6 +177,7 @@ class HAClient:
             kwargs["url_path"] = url_path
         await self.send_command("lovelace/config/save", **kwargs)
 
+    @logfire.instrument("Create dashboard: {url_path}")
     async def create_dashboard(
         self,
         url_path: str,
@@ -192,6 +198,7 @@ class HAClient:
             kwargs["icon"] = icon
         await self.send_command("lovelace/dashboards/create", **kwargs)
 
+    @logfire.instrument("Update dashboard: {dashboard_id}")
     async def update_dashboard(
         self,
         dashboard_id: str,
@@ -212,6 +219,7 @@ class HAClient:
             kwargs["require_admin"] = require_admin
         await self.send_command("lovelace/dashboards/update", **kwargs)
 
+    @logfire.instrument("Delete dashboard: {dashboard_id}")
     async def delete_dashboard(self, dashboard_id: str) -> None:
         """Delete a dashboard."""
         await self.send_command("lovelace/dashboards/delete", dashboard_id=dashboard_id)
@@ -250,6 +258,7 @@ class HAClient:
         response = await self.http.delete(f"/api/config/automation/config/{automation_id}")
         response.raise_for_status()
 
+    @logfire.instrument("Reload automations")
     async def reload_automations(self) -> None:
         """Reload automations."""
         await self.call_service("automation", "reload")
@@ -288,6 +297,7 @@ class HAClient:
         response = await self.http.delete(f"/api/config/script/config/{script_id}")
         response.raise_for_status()
 
+    @logfire.instrument("Reload scripts")
     async def reload_scripts(self) -> None:
         """Reload scripts."""
         await self.call_service("script", "reload")
@@ -326,21 +336,25 @@ class HAClient:
         response = await self.http.delete(f"/api/config/scene/config/{scene_id}")
         response.raise_for_status()
 
+    @logfire.instrument("Reload scenes")
     async def reload_scenes(self) -> None:
         """Reload scenes."""
         await self.call_service("scene", "reload")
 
     # --- Helper Commands (via WebSocket) ---
 
+    @logfire.instrument("Get {helper_type}s")
     async def _get_helpers(self, helper_type: str) -> list[dict[str, Any]]:
         """Get all helpers of a specific type."""
         result = await self.send_command(f"{helper_type}/list")
         return result if isinstance(result, list) else []
 
+    @logfire.instrument("Create {helper_type}")
     async def _create_helper(self, helper_type: str, config: dict[str, Any]) -> None:
         """Create a helper."""
         await self.send_command(f"{helper_type}/create", **config)
 
+    @logfire.instrument("Update {helper_type}: {helper_id}")
     async def _update_helper(
         self, helper_type: str, helper_id: str, config: dict[str, Any]
     ) -> None:
@@ -350,6 +364,7 @@ class HAClient:
             f"{helper_type}/update", **{f"{helper_type}_id": helper_id, **config_copy}
         )
 
+    @logfire.instrument("Delete {helper_type}: {helper_id}")
     async def _delete_helper(self, helper_type: str, helper_id: str) -> None:
         """Delete a helper."""
         await self.send_command(f"{helper_type}/delete", **{f"{helper_type}_id": helper_id})
@@ -471,6 +486,7 @@ class HAClient:
     async def delete_counter(self, helper_id: str) -> None:
         await self._delete_helper("counter", helper_id)
 
+    @logfire.instrument("Reload helpers")
     async def reload_helpers(self) -> None:
         """Reload all helper integrations."""
         for domain in [
@@ -491,11 +507,26 @@ class HAClient:
 
     @logfire.instrument("Get config entries: {domain}")
     async def get_config_entries(self, domain: str | None = None) -> list[dict[str, Any]]:
-        """Get all config entries, optionally filtered by domain."""
-        entries = await self.send_command("config_entries/get")
+        """Get all config entries, optionally filtered by domain.
+
+        Results are cached in memory for the duration of the client session.
+        Cache is invalidated when config entries are created, updated, or deleted.
+        """
+        if self._config_entries_cache is None:
+            result = await self.send_command("config_entries/get")
+            self._config_entries_cache = result if isinstance(result, list) else []
+
+        entries = self._config_entries_cache
         if domain:
             entries = [e for e in entries if e.get("domain") == domain]
-        return entries if isinstance(entries, list) else []
+        return entries
+
+    def invalidate_config_entries_cache(self) -> None:
+        """Invalidate the config entries cache.
+
+        Call this after creating, updating, or deleting config entries.
+        """
+        self._config_entries_cache = None
 
     @logfire.instrument("Get config entry options: {entry_id}")
     async def get_config_entry_options(self, entry_id: str) -> dict[str, Any]:
@@ -545,6 +576,7 @@ class HAClient:
         """Delete a config entry."""
         response = await self.http.delete(f"/api/config/config_entries/entry/{entry_id}")
         response.raise_for_status()
+        self.invalidate_config_entries_cache()
 
     @logfire.instrument("Create config entry: {domain}")
     async def create_config_entry(
@@ -600,6 +632,7 @@ class HAClient:
             if result.get("type") == "create_entry":
                 entry_id = result["result"]["entry_id"]
                 logfire.info("Created config entry {entry_id}", entry_id=entry_id)
+                self.invalidate_config_entries_cache()
                 return entry_id
             elif result.get("errors"):
                 logfire.warning("Config flow errors: {errors}", errors=result["errors"])
@@ -651,6 +684,8 @@ class HAClient:
             if result.get("errors"):
                 logfire.warning("Options flow errors: {errors}", errors=result["errors"])
                 raise ValueError(f"Options flow errors: {result['errors']}")
+
+            self.invalidate_config_entries_cache()
 
         except Exception:
             # Clean up the flow on error
