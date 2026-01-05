@@ -198,11 +198,12 @@ class GroupSyncer(BaseSyncer):
         return result
 
     @logfire.instrument("Pull groups")
-    async def pull(self, sync_deletions: bool = False) -> SyncResult:
+    async def pull(self, sync_deletions: bool = False, dry_run: bool = False) -> SyncResult:
         """Pull group helpers from Home Assistant to local files."""
         result = SyncResult(created=[], updated=[], deleted=[], renamed=[], errors=[])
 
-        self.local_path.mkdir(parents=True, exist_ok=True)
+        if not dry_run:
+            self.local_path.mkdir(parents=True, exist_ok=True)
         remote = await self.get_remote_entities()
         local = self.get_local_entities()
 
@@ -216,7 +217,8 @@ class GroupSyncer(BaseSyncer):
 
             # Create subtype directory
             subtype_path = self._subtype_path(subtype)
-            subtype_path.mkdir(parents=True, exist_ok=True)
+            if not dry_run:
+                subtype_path.mkdir(parents=True, exist_ok=True)
 
             # Track filenames per subtype
             if subtype not in used_filenames:
@@ -265,27 +267,36 @@ class GroupSyncer(BaseSyncer):
                         old_path = subtype_path / current_filename
                         new_path = subtype_path / expected_filename
                         if old_path.exists():
-                            dump_yaml(ordered, new_path)
-                            old_path.unlink()
-                            result.renamed.append((full_id, full_id))
                             old_rel = relative_path(old_path)
                             new_rel = relative_path(new_path)
-                            console.print(f"  [blue]Renamed[/blue] {old_rel} -> {new_rel}")
+                            if dry_run:
+                                console.print(f"  [cyan]Would rename[/cyan] {old_rel} -> {new_rel}")
+                            else:
+                                dump_yaml(ordered, new_path)
+                                old_path.unlink()
+                                console.print(f"  [blue]Renamed[/blue] {old_rel} -> {new_rel}")
+                            result.renamed.append((full_id, full_id))
                     elif ordered != local_normalized:
                         file_path = subtype_path / (current_filename or expected_filename)
-                        dump_yaml(ordered, file_path)
-                        result.updated.append(full_id)
                         rel_path = relative_path(file_path)
-                        console.print(f"  [yellow]Updated[/yellow] {rel_path}")
+                        if dry_run:
+                            console.print(f"  [cyan]Would update[/cyan] {rel_path}")
+                        else:
+                            dump_yaml(ordered, file_path)
+                            console.print(f"  [yellow]Updated[/yellow] {rel_path}")
+                        result.updated.append(full_id)
                 else:
                     # New entry
                     filename = self._get_filename(name, entry_id, used_filenames[subtype])
                     used_filenames[subtype].add(filename)
                     file_path = subtype_path / filename
-                    dump_yaml(ordered, file_path)
-                    result.created.append(full_id)
                     rel_path = relative_path(file_path)
-                    console.print(f"  [green]Created[/green] {rel_path}")
+                    if dry_run:
+                        console.print(f"  [cyan]Would create[/cyan] {rel_path}")
+                    else:
+                        dump_yaml(ordered, file_path)
+                        console.print(f"  [green]Created[/green] {rel_path}")
+                    result.created.append(full_id)
 
             except Exception as e:
                 result.errors.append((full_id, str(e)))
@@ -302,10 +313,13 @@ class GroupSyncer(BaseSyncer):
                     if filename:
                         file_path = self._subtype_path(subtype) / filename
                         if file_path.exists():
-                            file_path.unlink()
-                            result.deleted.append(full_id)
                             rel_path = relative_path(file_path)
-                            console.print(f"  [red]Deleted[/red] {rel_path}")
+                            if dry_run:
+                                console.print(f"  [cyan]Would delete[/cyan] {rel_path}")
+                            else:
+                                file_path.unlink()
+                                console.print(f"  [red]Deleted[/red] {rel_path}")
+                            result.deleted.append(full_id)
         else:
             # Warn about local files without remote counterpart
             orphaned = [fid for fid in local if fid not in remote]
@@ -481,6 +495,12 @@ class GroupSyncer(BaseSyncer):
 
         for full_id, local_data in local.items():
             subtype = local_data["subtype"]
+            entry_id = local_data.get("entry_id", full_id.split("/")[-1])
+            name = local_data.get("name", entry_id)
+            filename = local_data.get("_filename", filename_from_name(name, entry_id))
+            file_path = self._subtype_path(subtype) / filename
+            rel_path = relative_path(file_path)
+
             # Remove metadata from comparison
             local_config = {
                 k: v for k, v in local_data.items() if k not in ("subtype", "_filename")
@@ -492,16 +512,17 @@ class GroupSyncer(BaseSyncer):
                         entity_id=full_id,
                         status="added",
                         local=local_config,
+                        file_path=rel_path,
                     )
                 )
             else:
                 remote_data = remote[full_id]
-                entry_id = full_id.split("/")[-1]
+                remote_entry_id = full_id.split("/")[-1]
                 remote_config = {k: v for k, v in remote_data.items() if k != "subtype"}
 
                 # Ensure entry_id is in remote config for comparison
                 if "entry_id" not in remote_config:
-                    remote_config = {"entry_id": entry_id, **remote_config}
+                    remote_config = {"entry_id": remote_entry_id, **remote_config}
 
                 # Normalize both through Pydantic for consistent comparison
                 model_class = self._get_model_for_subtype(subtype)
@@ -523,18 +544,26 @@ class GroupSyncer(BaseSyncer):
                             status="modified",
                             local=local_normalized,
                             remote=remote_normalized,
+                            file_path=rel_path,
                         )
                     )
 
         for full_id in remote:
             if full_id not in local:
                 remote_data = remote[full_id]
+                subtype = remote_data.get("subtype", full_id.split("/")[0])
+                entry_id = remote_data.get("entry_id", full_id.split("/")[-1])
+                name = remote_data.get("name", entry_id)
+                filename = filename_from_name(name, entry_id)
+                file_path = self._subtype_path(subtype) / filename
+                rel_path = relative_path(file_path)
                 remote_config = {k: v for k, v in remote_data.items() if k != "subtype"}
                 items.append(
                     DiffItem(
                         entity_id=full_id,
                         status="deleted",
                         remote=remote_config,
+                        file_path=rel_path,
                     )
                 )
 

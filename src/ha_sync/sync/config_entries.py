@@ -324,11 +324,12 @@ class ConfigEntrySyncer(BaseSyncer):
         return f"{base}-{entry_id}.yaml"
 
     @logfire.instrument("Pull {self.domain} helpers")
-    async def pull(self, sync_deletions: bool = False) -> SyncResult:
+    async def pull(self, sync_deletions: bool = False, dry_run: bool = False) -> SyncResult:
         """Pull helpers from Home Assistant to local files."""
         result = SyncResult(created=[], updated=[], deleted=[], renamed=[], errors=[])
 
-        self.local_path.mkdir(parents=True, exist_ok=True)
+        if not dry_run:
+            self.local_path.mkdir(parents=True, exist_ok=True)
         remote = await self.get_remote_entities()
         local = self.get_local_entities()
 
@@ -362,27 +363,36 @@ class ConfigEntrySyncer(BaseSyncer):
                         old_path = self.local_path / current_filename
                         new_path = self.local_path / expected_filename
                         if old_path.exists():
-                            dump_yaml(ordered, new_path)
-                            old_path.unlink()
-                            result.renamed.append((entry_id, entry_id))
                             old_rel = relative_path(old_path)
                             new_rel = relative_path(new_path)
-                            console.print(f"  [blue]Renamed[/blue] {old_rel} -> {new_rel}")
+                            if dry_run:
+                                console.print(f"  [cyan]Would rename[/cyan] {old_rel} -> {new_rel}")
+                            else:
+                                dump_yaml(ordered, new_path)
+                                old_path.unlink()
+                                console.print(f"  [blue]Renamed[/blue] {old_rel} -> {new_rel}")
+                            result.renamed.append((entry_id, entry_id))
                     elif ordered != local_normalized:
                         file_path = self.local_path / (current_filename or expected_filename)
-                        dump_yaml(ordered, file_path)
-                        result.updated.append(entry_id)
                         rel_path = relative_path(file_path)
-                        console.print(f"  [yellow]Updated[/yellow] {rel_path}")
+                        if dry_run:
+                            console.print(f"  [cyan]Would update[/cyan] {rel_path}")
+                        else:
+                            dump_yaml(ordered, file_path)
+                            console.print(f"  [yellow]Updated[/yellow] {rel_path}")
+                        result.updated.append(entry_id)
                 else:
                     # New entry
                     filename = self._get_filename(name, entry_id, used_filenames)
                     used_filenames.add(filename)
                     file_path = self.local_path / filename
-                    dump_yaml(ordered, file_path)
-                    result.created.append(entry_id)
                     rel_path = relative_path(file_path)
-                    console.print(f"  [green]Created[/green] {rel_path}")
+                    if dry_run:
+                        console.print(f"  [cyan]Would create[/cyan] {rel_path}")
+                    else:
+                        dump_yaml(ordered, file_path)
+                        console.print(f"  [green]Created[/green] {rel_path}")
+                    result.created.append(entry_id)
 
             except Exception as e:
                 result.errors.append((entry_id, str(e)))
@@ -397,10 +407,13 @@ class ConfigEntrySyncer(BaseSyncer):
                     if filename:
                         file_path = self.local_path / filename
                         if file_path.exists():
-                            file_path.unlink()
-                            result.deleted.append(entry_id)
                             rel_path = relative_path(file_path)
-                            console.print(f"  [red]Deleted[/red] {rel_path}")
+                            if dry_run:
+                                console.print(f"  [cyan]Would delete[/cyan] {rel_path}")
+                            else:
+                                file_path.unlink()
+                                console.print(f"  [red]Deleted[/red] {rel_path}")
+                            result.deleted.append(entry_id)
         else:
             orphaned = [eid for eid in local if eid not in remote]
             if orphaned:
@@ -563,11 +576,23 @@ class ConfigEntrySyncer(BaseSyncer):
         local = self.get_local_entities()
 
         for entry_id, local_data in local.items():
+            name = local_data.get("name", entry_id)
+            filename = local_data.get("_filename", filename_from_name(name, entry_id))
+            file_path = self.local_path / filename
+            rel_path = relative_path(file_path)
+
             # Remove _filename from comparison
             local_clean = {k: v for k, v in local_data.items() if k != "_filename"}
 
             if entry_id not in remote:
-                items.append(DiffItem(entity_id=entry_id, status="added", local=local_clean))
+                items.append(
+                    DiffItem(
+                        entity_id=entry_id,
+                        status="added",
+                        local=local_clean,
+                        file_path=rel_path,
+                    )
+                )
             else:
                 remote_data = remote[entry_id]
                 if "entry_id" not in remote_data:
@@ -583,13 +608,24 @@ class ConfigEntrySyncer(BaseSyncer):
                             status="modified",
                             local=local_normalized,
                             remote=remote_normalized,
+                            file_path=rel_path,
                         )
                     )
 
         for entry_id in remote:
             if entry_id not in local:
+                remote_data = remote[entry_id]
+                name = remote_data.get("name", entry_id)
+                filename = filename_from_name(name, entry_id)
+                file_path = self.local_path / filename
+                rel_path = relative_path(file_path)
                 items.append(
-                    DiffItem(entity_id=entry_id, status="deleted", remote=remote[entry_id])
+                    DiffItem(
+                        entity_id=entry_id,
+                        status="deleted",
+                        remote=remote_data,
+                        file_path=rel_path,
+                    )
                 )
 
         return items

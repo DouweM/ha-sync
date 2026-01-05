@@ -261,11 +261,12 @@ class DashboardSyncer(BaseSyncer):
         return config
 
     @logfire.instrument("Pull dashboards")
-    async def pull(self, sync_deletions: bool = False) -> SyncResult:
+    async def pull(self, sync_deletions: bool = False, dry_run: bool = False) -> SyncResult:
         """Pull dashboards from Home Assistant to local files."""
         result = SyncResult(created=[], updated=[], deleted=[], renamed=[], errors=[])
 
-        self.local_path.mkdir(parents=True, exist_ok=True)
+        if not dry_run:
+            self.local_path.mkdir(parents=True, exist_ok=True)
         remote = await self.get_remote_entities()
         local = self.get_local_entities()
 
@@ -283,17 +284,25 @@ class DashboardSyncer(BaseSyncer):
                     local_normalized = self._normalize_config(local_config or {})
                     remote_normalized = self._normalize_config(config)
                     if dump_yaml(remote_normalized) != dump_yaml(local_normalized):
-                        self._save_dashboard_locally(dir_name, meta, config)
+                        if dry_run:
+                            console.print(f"  [cyan]Would update[/cyan] {rel_meta_path}")
+                            # List views that would be updated
+                            self._print_views(dashboard_dir, "cyan", "Would update")
+                        else:
+                            self._save_dashboard_locally(dir_name, meta, config)
+                            console.print(f"  [yellow]Updated[/yellow] {rel_meta_path}")
+                            # List views
+                            self._print_views(dashboard_dir, "yellow", "Updated")
                         result.updated.append(dir_name)
-                        console.print(f"  [yellow]Updated[/yellow] {rel_meta_path}")
-                        # List views
-                        self._print_views(dashboard_dir, "yellow", "Updated")
                 else:
-                    self._save_dashboard_locally(dir_name, meta, config)
+                    if dry_run:
+                        console.print(f"  [cyan]Would create[/cyan] {rel_meta_path}")
+                    else:
+                        self._save_dashboard_locally(dir_name, meta, config)
+                        console.print(f"  [green]Created[/green] {rel_meta_path}")
+                        # List views
+                        self._print_views(dashboard_dir, "green", "Created")
                     result.created.append(dir_name)
-                    console.print(f"  [green]Created[/green] {rel_meta_path}")
-                    # List views
-                    self._print_views(dashboard_dir, "green", "Created")
 
             except Exception as e:
                 result.errors.append((dir_name, str(e)))
@@ -307,13 +316,18 @@ class DashboardSyncer(BaseSyncer):
                 if dir_name not in remote:
                     dashboard_dir = self.local_path / dir_name
                     if dashboard_dir.exists():
-                        # Print views before deleting
-                        self._print_views(dashboard_dir, "red", "Deleted")
                         meta_path = dashboard_dir / META_FILE
                         rel_meta_path = relative_path(meta_path)
-                        shutil.rmtree(dashboard_dir)
+                        if dry_run:
+                            # Print views that would be deleted
+                            self._print_views(dashboard_dir, "cyan", "Would delete")
+                            console.print(f"  [cyan]Would delete[/cyan] {rel_meta_path}")
+                        else:
+                            # Print views before deleting
+                            self._print_views(dashboard_dir, "red", "Deleted")
+                            shutil.rmtree(dashboard_dir)
+                            console.print(f"  [red]Deleted[/red] {rel_meta_path}")
                         result.deleted.append(dir_name)
-                        console.print(f"  [red]Deleted[/red] {rel_meta_path}")
         else:
             # Warn about local directories without remote counterpart
             orphaned = [d for d in local if d not in remote]
@@ -641,6 +655,8 @@ class DashboardSyncer(BaseSyncer):
                 remote_url_path = remote[dir_name]["meta"].get("url_path")
                 if local_url_path and remote_url_path and local_url_path != remote_url_path:
                     url_path_renames.add(dir_name)
+                    meta_path = self.local_path / dir_name / META_FILE
+                    rel_path = relative_path(meta_path)
                     items.append(
                         DiffItem(
                             entity_id=dir_name,
@@ -648,6 +664,7 @@ class DashboardSyncer(BaseSyncer):
                             local=local_data["config"],
                             remote=remote[dir_name]["config"],
                             new_id=local_url_path,
+                            file_path=f"{rel_path} ({remote_url_path} -> {local_url_path})",
                         )
                     )
 
@@ -656,6 +673,8 @@ class DashboardSyncer(BaseSyncer):
                 continue
 
             local_config = local_data["config"]
+            meta_path = self.local_path / dir_name / META_FILE
+            rel_path = relative_path(meta_path)
 
             if dir_name not in remote:
                 items.append(
@@ -663,6 +682,7 @@ class DashboardSyncer(BaseSyncer):
                         entity_id=dir_name,
                         status="added",
                         local=local_config,
+                        file_path=rel_path,
                     )
                 )
             else:
@@ -678,16 +698,20 @@ class DashboardSyncer(BaseSyncer):
                             status="modified",
                             local=local_config,
                             remote=remote_config,
+                            file_path=rel_path,
                         )
                     )
 
         for dir_name in remote:
             if dir_name not in local and dir_name not in url_path_renames:
+                meta_path = self.local_path / dir_name / META_FILE
+                rel_path = relative_path(meta_path)
                 items.append(
                     DiffItem(
                         entity_id=dir_name,
                         status="deleted",
                         remote=remote[dir_name]["config"],
+                        file_path=rel_path,
                     )
                 )
 

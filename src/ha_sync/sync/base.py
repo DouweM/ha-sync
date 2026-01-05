@@ -44,6 +44,7 @@ class DiffItem:
     local: dict[str, Any] | None = None
     remote: dict[str, Any] | None = None
     new_id: str | None = None  # For renames
+    file_path: str | None = None  # Relative file path for display
 
 
 class BaseSyncer(ABC):
@@ -62,11 +63,12 @@ class BaseSyncer(ABC):
         ...
 
     @abstractmethod
-    async def pull(self, sync_deletions: bool = False) -> SyncResult:
+    async def pull(self, sync_deletions: bool = False, dry_run: bool = False) -> SyncResult:
         """Pull entities from Home Assistant to local files.
 
         Args:
             sync_deletions: If True, delete local files that don't exist remotely.
+            dry_run: If True, show what would be done without making changes.
         """
         ...
 
@@ -186,12 +188,13 @@ class SimpleEntitySyncer(BaseSyncer):
         """Reload entities in Home Assistant."""
         ...
 
-    async def pull(self, sync_deletions: bool = False) -> SyncResult:
+    async def pull(self, sync_deletions: bool = False, dry_run: bool = False) -> SyncResult:
         """Pull entities from Home Assistant to local files."""
-        with logfire.span("Pull {entity_type}s", entity_type=self.entity_type):
+        with logfire.span("Pull {entity_type}s", entity_type=self.entity_type, dry_run=dry_run):
             result = SyncResult(created=[], updated=[], deleted=[], renamed=[], errors=[])
 
-            self.local_path.mkdir(parents=True, exist_ok=True)
+            if not dry_run:
+                self.local_path.mkdir(parents=True, exist_ok=True)
             remote = await self.get_remote_entities()
             local = self.get_local_entities()
 
@@ -205,13 +208,19 @@ class SimpleEntitySyncer(BaseSyncer):
                     local_config = self.clean_config(local[entity_id])
                     local_normalized = self.normalize(local_config)
                     if ordered != local_normalized:
-                        dump_yaml(ordered, file_path)
+                        if dry_run:
+                            console.print(f"  [cyan]Would update[/cyan] {rel_path}")
+                        else:
+                            dump_yaml(ordered, file_path)
+                            console.print(f"  [yellow]Updated[/yellow] {rel_path}")
                         result.updated.append(entity_id)
-                        console.print(f"  [yellow]Updated[/yellow] {rel_path}")
                 else:
-                    dump_yaml(ordered, file_path)
+                    if dry_run:
+                        console.print(f"  [cyan]Would create[/cyan] {rel_path}")
+                    else:
+                        dump_yaml(ordered, file_path)
+                        console.print(f"  [green]Created[/green] {rel_path}")
                     result.created.append(entity_id)
-                    console.print(f"  [green]Created[/green] {rel_path}")
 
             if sync_deletions:
                 for entity_id, local_data in local.items():
@@ -221,10 +230,13 @@ class SimpleEntitySyncer(BaseSyncer):
                         )
                         file_path = self.local_path / filename
                         if file_path.exists():
-                            file_path.unlink()
-                            result.deleted.append(entity_id)
                             rel_path = relative_path(file_path)
-                            console.print(f"  [red]Deleted[/red] {rel_path}")
+                            if dry_run:
+                                console.print(f"  [cyan]Would delete[/cyan] {rel_path}")
+                            else:
+                                file_path.unlink()
+                                console.print(f"  [red]Deleted[/red] {rel_path}")
+                            result.deleted.append(entity_id)
             else:
                 orphaned = [eid for eid in local if eid not in remote]
                 if orphaned:
@@ -424,6 +436,8 @@ class SimpleEntitySyncer(BaseSyncer):
 
             # Add rename items
             for old_id, new_id in renames.items():
+                old_file = self.local_path / filename_from_id(old_id)
+                new_file = self.local_path / filename_from_id(new_id)
                 items.append(
                     DiffItem(
                         entity_id=old_id,
@@ -431,6 +445,7 @@ class SimpleEntitySyncer(BaseSyncer):
                         local=local.get(new_id),
                         remote=remote.get(old_id),
                         new_id=new_id,
+                        file_path=f"{relative_path(old_file)} -> {relative_path(new_file)}",
                     )
                 )
 
@@ -441,6 +456,8 @@ class SimpleEntitySyncer(BaseSyncer):
                     continue
 
                 local_clean = self.clean_config(local_config)
+                filename = local_config.get("_filename", self.get_filename(entity_id, local_config))
+                file_path = self.local_path / filename
 
                 if entity_id not in remote:
                     items.append(
@@ -448,6 +465,7 @@ class SimpleEntitySyncer(BaseSyncer):
                             entity_id=entity_id,
                             status="added",
                             local=local_clean,
+                            file_path=relative_path(file_path),
                         )
                     )
                 else:
@@ -462,17 +480,21 @@ class SimpleEntitySyncer(BaseSyncer):
                                 status="modified",
                                 local=local_normalized,
                                 remote=remote_normalized,
+                                file_path=relative_path(file_path),
                             )
                         )
 
             # Check for deletions
             for entity_id in remote:
                 if entity_id not in local and entity_id not in renames:
+                    filename = self.get_filename(entity_id, remote[entity_id])
+                    file_path = self.local_path / filename
                     items.append(
                         DiffItem(
                             entity_id=entity_id,
                             status="deleted",
                             remote=remote[entity_id],
+                            file_path=relative_path(file_path),
                         )
                     )
 

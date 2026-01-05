@@ -109,13 +109,14 @@ class HelperSyncer(BaseSyncer):
         return result
 
     @logfire.instrument("Pull helpers")
-    async def pull(self, sync_deletions: bool = False) -> SyncResult:
+    async def pull(self, sync_deletions: bool = False, dry_run: bool = False) -> SyncResult:
         """Pull helpers from Home Assistant to local files."""
         result = SyncResult(created=[], updated=[], deleted=[], renamed=[], errors=[])
 
         # Ensure all helper directories exist
-        for helper_type in HELPER_TYPES:
-            self._helper_path(helper_type).mkdir(parents=True, exist_ok=True)
+        if not dry_run:
+            for helper_type in HELPER_TYPES:
+                self._helper_path(helper_type).mkdir(parents=True, exist_ok=True)
 
         remote = await self.get_remote_entities()
         local = self.get_local_entities()
@@ -150,13 +151,19 @@ class HelperSyncer(BaseSyncer):
                     else:
                         local_normalized = local_config
                     if ordered != local_normalized:
-                        dump_yaml(ordered, file_path)
+                        if dry_run:
+                            console.print(f"  [cyan]Would update[/cyan] {rel_path}")
+                        else:
+                            dump_yaml(ordered, file_path)
+                            console.print(f"  [yellow]Updated[/yellow] {rel_path}")
                         result.updated.append(full_id)
-                        console.print(f"  [yellow]Updated[/yellow] {rel_path}")
                 else:
-                    dump_yaml(ordered, file_path)
+                    if dry_run:
+                        console.print(f"  [cyan]Would create[/cyan] {rel_path}")
+                    else:
+                        dump_yaml(ordered, file_path)
+                        console.print(f"  [green]Created[/green] {rel_path}")
                     result.created.append(full_id)
-                    console.print(f"  [green]Created[/green] {rel_path}")
 
             except Exception as e:
                 result.errors.append((full_id, str(e)))
@@ -170,10 +177,13 @@ class HelperSyncer(BaseSyncer):
                     helper_id = full_id.split("/")[-1]
                     file_path = self._helper_path(helper_type) / filename_from_id(helper_id)
                     if file_path.exists():
-                        file_path.unlink()
-                        result.deleted.append(full_id)
                         rel_path = relative_path(file_path)
-                        console.print(f"  [red]Deleted[/red] {rel_path}")
+                        if dry_run:
+                            console.print(f"  [cyan]Would delete[/cyan] {rel_path}")
+                        else:
+                            file_path.unlink()
+                            console.print(f"  [red]Deleted[/red] {rel_path}")
+                        result.deleted.append(full_id)
         else:
             # Warn about local files without remote counterpart
             orphaned = [fid for fid in local if fid not in remote]
@@ -371,6 +381,8 @@ class HelperSyncer(BaseSyncer):
                     new_full_id = f"{helper_type}/{content_id}"
                     if content_id != filename_id and old_full_id in remote:
                         renames.add(old_full_id)
+                        old_file = helper_path / filename_from_id(filename_id)
+                        rel_path = relative_path(old_file)
                         items.append(
                             DiffItem(
                                 entity_id=old_full_id,
@@ -378,12 +390,18 @@ class HelperSyncer(BaseSyncer):
                                 local=data,
                                 remote=remote.get(old_full_id),
                                 new_id=new_full_id,
+                                file_path=rel_path,
                             )
                         )
 
         for full_id, local_data in local.items():
             if full_id in renames:
                 continue
+
+            helper_type = full_id.split("/")[0]
+            helper_id = full_id.split("/")[-1]
+            file_path = self._helper_path(helper_type) / filename_from_id(helper_id)
+            rel_path = relative_path(file_path)
 
             local_config = {k: v for k, v in local_data.items() if k != "type"}
 
@@ -393,12 +411,11 @@ class HelperSyncer(BaseSyncer):
                         entity_id=full_id,
                         status="added",
                         local=local_config,
+                        file_path=rel_path,
                     )
                 )
             else:
                 remote_data = remote[full_id]
-                helper_type = full_id.split("/")[0]
-                helper_id = full_id.split("/")[-1]
                 remote_config = {k: v for k, v in remote_data.items() if k != "type"}
                 # Add id to remote config for comparison (like pull does)
                 if "id" not in remote_config:
@@ -420,18 +437,24 @@ class HelperSyncer(BaseSyncer):
                             status="modified",
                             local=local_normalized,
                             remote=remote_normalized,
+                            file_path=rel_path,
                         )
                     )
 
         for full_id in remote:
             if full_id not in local and full_id not in renames:
                 remote_data = remote[full_id]
+                helper_type = full_id.split("/")[0]
+                helper_id = full_id.split("/")[-1]
+                file_path = self._helper_path(helper_type) / filename_from_id(helper_id)
+                rel_path = relative_path(file_path)
                 remote_config = {k: v for k, v in remote_data.items() if k != "type"}
                 items.append(
                     DiffItem(
                         entity_id=full_id,
                         status="deleted",
                         remote=remote_config,
+                        file_path=rel_path,
                     )
                 )
 

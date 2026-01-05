@@ -73,18 +73,19 @@ class AutomationSyncer(BaseSyncer):
         return result
 
     @logfire.instrument("Pull automations")
-    async def pull(self, sync_deletions: bool = False) -> SyncResult:
+    async def pull(self, sync_deletions: bool = False, dry_run: bool = False) -> SyncResult:
         """Pull automations from Home Assistant to local files."""
         result = SyncResult(created=[], updated=[], deleted=[], renamed=[], errors=[])
 
-        self.local_path.mkdir(parents=True, exist_ok=True)
+        if not dry_run:
+            self.local_path.mkdir(parents=True, exist_ok=True)
         remote = await self.get_remote_entities()
         local = self.get_local_entities()
 
         # Track used filenames to handle collisions
         used_filenames: set[str] = set()
 
-        with logfire.span("Write local files"):
+        with logfire.span("Write local files", dry_run=dry_run):
             for auto_id, config in remote.items():
                 alias = config.get("alias", "")
 
@@ -116,13 +117,19 @@ class AutomationSyncer(BaseSyncer):
                     }
                     local_normalized = Automation.normalize(local_config)
                     if ordered != local_normalized:
-                        dump_yaml(ordered, file_path)
+                        if dry_run:
+                            console.print(f"  [cyan]Would update[/cyan] {rel_path}")
+                        else:
+                            dump_yaml(ordered, file_path)
+                            console.print(f"  [yellow]Updated[/yellow] {rel_path}")
                         result.updated.append(auto_id)
-                        console.print(f"  [yellow]Updated[/yellow] {rel_path}")
                 else:
-                    dump_yaml(ordered, file_path)
+                    if dry_run:
+                        console.print(f"  [cyan]Would create[/cyan] {rel_path}")
+                    else:
+                        dump_yaml(ordered, file_path)
+                        console.print(f"  [green]Created[/green] {rel_path}")
                     result.created.append(auto_id)
-                    console.print(f"  [green]Created[/green] {rel_path}")
 
             # Delete local files that don't exist in remote
             if sync_deletions:
@@ -132,10 +139,13 @@ class AutomationSyncer(BaseSyncer):
                         if filename:
                             file_path = self.local_path / filename
                             if file_path.exists():
-                                file_path.unlink()
-                                result.deleted.append(auto_id)
                                 rel_path = relative_path(file_path)
-                                console.print(f"  [red]Deleted[/red] {rel_path}")
+                                if dry_run:
+                                    console.print(f"  [cyan]Would delete[/cyan] {rel_path}")
+                                else:
+                                    file_path.unlink()
+                                    console.print(f"  [red]Deleted[/red] {rel_path}")
+                                result.deleted.append(auto_id)
             else:
                 # Warn about local files without remote counterpart
                 orphaned = [aid for aid in local if aid not in remote]
@@ -335,6 +345,9 @@ class AutomationSyncer(BaseSyncer):
         for auto_id, local_config in local.items():
             # Remove internal metadata for comparison
             local_clean = {k: v for k, v in local_config.items() if not k.startswith("_")}
+            filename = local_config.get("_filename", filename_from_name(local_config.get("alias", ""), auto_id))
+            file_path = self.local_path / filename
+            rel_path = relative_path(file_path)
 
             if auto_id not in remote:
                 items.append(
@@ -342,6 +355,7 @@ class AutomationSyncer(BaseSyncer):
                         entity_id=auto_id,
                         status="added",
                         local=local_clean,
+                        file_path=rel_path,
                     )
                 )
             else:
@@ -362,17 +376,23 @@ class AutomationSyncer(BaseSyncer):
                             status="modified",
                             local=local_normalized,
                             remote=remote_normalized,
+                            file_path=rel_path,
                         )
                     )
 
         # Check for deletions
         for auto_id in remote:
             if auto_id not in local:
+                alias = remote[auto_id].get("alias", "")
+                filename = filename_from_name(alias, auto_id)
+                file_path = self.local_path / filename
+                rel_path = relative_path(file_path)
                 items.append(
                     DiffItem(
                         entity_id=auto_id,
                         status="deleted",
                         remote=remote[auto_id],
+                        file_path=rel_path,
                     )
                 )
 

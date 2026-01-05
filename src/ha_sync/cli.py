@@ -226,7 +226,7 @@ def _validate_impl(
     """Implementation of validate command."""
     import re
 
-    from ha_sync.utils import load_yaml
+    from ha_sync.utils import load_yaml, relative_path
 
     config = get_config()
     errors: list[tuple[str, str]] = []
@@ -240,76 +240,78 @@ def _validate_impl(
         console.print("[dim]Getting diff to find changed files...[/dim]")
         diff_items = asyncio.run(_get_diff_items(config, entity_type))
         for item in diff_items:
-            # Map entity ID to file path
-            if item.status in ("added", "modified", "renamed"):
-                changed_files.add(item.entity_id)
+            # Collect file paths from changed items
+            if item.status in ("added", "modified", "renamed") and item.file_path:
+                changed_files.add(item.file_path)
 
-    def validate_entity_id(entity_id: str, file_path: Path) -> None:
+    def validate_entity_id(entity_id: str, rel_path: str) -> None:
         """Validate entity ID format."""
         if not re.match(ENTITY_ID_PATTERN, entity_id):
-            errors.append((str(file_path), f"Invalid entity ID format: '{entity_id}'"))
+            errors.append((rel_path, f"Invalid entity ID format: '{entity_id}'"))
 
     def validate_yaml_file(file_path: Path, required_fields: list[str] | None = None) -> None:
         """Validate a single YAML file."""
         nonlocal files_checked
         files_checked += 1
 
+        rel_path = relative_path(file_path)
+
         try:
             data = load_yaml(file_path)
             if data is None:
-                warnings.append((str(file_path), "Empty file"))
+                warnings.append((rel_path, "Empty file"))
                 return
             if not isinstance(data, dict):
-                errors.append((str(file_path), "Root must be a dictionary"))
+                errors.append((rel_path, "Root must be a dictionary"))
                 return
 
             # Check required fields
             if required_fields:
                 for field in required_fields:
                     if field not in data:
-                        errors.append((str(file_path), f"Missing required field: '{field}'"))
+                        errors.append((rel_path, f"Missing required field: '{field}'"))
 
             # Validate entity ID if present
             if "id" in data:
-                validate_entity_id(data["id"], file_path)
+                validate_entity_id(data["id"], rel_path)
 
             # Check for Jinja2 templates and validate syntax
-            collect_templates(data, file_path)
+            collect_templates(data, rel_path)
 
         except Exception as e:
-            errors.append((str(file_path), f"YAML parse error: {e}"))
+            errors.append((rel_path, f"YAML parse error: {e}"))
 
-    def collect_templates(data: dict, file_path: Path, path: str = "") -> None:
+    def collect_templates(data: dict, rel_path: str, path: str = "") -> None:
         """Recursively collect Jinja2 templates and do basic syntax check."""
         for key, value in data.items():
             current_path = f"{path}.{key}" if path else key
             if isinstance(value, str) and ("{{" in value or "{%" in value):
                 # Basic Jinja2 syntax check
                 if value.count("{{") != value.count("}}"):
-                    errors.append((str(file_path), f"Unbalanced {{{{ }}}} in {current_path}"))
+                    errors.append((rel_path, f"Unbalanced {{{{ }}}} in {current_path}"))
                 elif value.count("{%") != value.count("%}"):
-                    errors.append((str(file_path), f"Unbalanced {{% %}} in {current_path}"))
+                    errors.append((rel_path, f"Unbalanced {{% %}} in {current_path}"))
                 else:
                     # Collect for remote validation
-                    templates_to_check.append((str(file_path), current_path, value))
+                    templates_to_check.append((rel_path, current_path, value))
             elif isinstance(value, dict):
-                collect_templates(value, file_path, current_path)
+                collect_templates(value, rel_path, current_path)
             elif isinstance(value, list):
                 for i, item in enumerate(value):
                     if isinstance(item, dict):
-                        collect_templates(item, file_path, f"{current_path}[{i}]")
+                        collect_templates(item, rel_path, f"{current_path}[{i}]")
                     elif isinstance(item, str) and ("{{" in item or "{%" in item):
                         if item.count("{{") != item.count("}}"):
                             errors.append(
-                                (str(file_path), f"Unbalanced {{{{ }}}} in {current_path}[{i}]")
+                                (rel_path, f"Unbalanced {{{{ }}}} in {current_path}[{i}]")
                             )
                         elif item.count("{%") != item.count("%}"):
                             errors.append(
-                                (str(file_path), f"Unbalanced {{% %}} in {current_path}[{i}]")
+                                (rel_path, f"Unbalanced {{% %}} in {current_path}[{i}]")
                             )
                         else:
                             location = f"{current_path}[{i}]"
-                            templates_to_check.append((str(file_path), location, item))
+                            templates_to_check.append((rel_path, location, item))
 
     console.print("[bold]Validating local files...[/bold]\n")
 
@@ -395,11 +397,7 @@ def _validate_impl(
         else:
             # Filter to only changed files if diff_only mode
             if diff_only and changed_files:
-                filtered = [
-                    t
-                    for t in templates_to_check
-                    if any(entity_id in t[0] for entity_id in changed_files)
-                ]
+                filtered = [t for t in templates_to_check if t[0] in changed_files]
                 if not filtered:
                     console.print("[dim]No templates in changed files[/dim]")
                 else:
@@ -500,25 +498,34 @@ def pull(
         bool,
         typer.Option("--sync-deletions", help="Delete local files not in Home Assistant"),
     ] = False,
+    dry_run: Annotated[
+        bool,
+        typer.Option("--dry-run", "-n", help="Show what would be done without making changes"),
+    ] = False,
 ) -> None:
     """Pull entities from Home Assistant to local files."""
-    with logfire.span("ha-sync pull {entity_type}", entity_type=entity_type.value):
+    with logfire.span("ha-sync pull {entity_type}", entity_type=entity_type.value, dry_run=dry_run):
         config = get_config()
         if not config.url or not config.token:
             console.print("[red]Missing HA_URL or HA_TOKEN.[/red] Set them in .env file.")
             raise typer.Exit(1)
 
-        asyncio.run(_pull(config, entity_type, sync_deletions))
+        if dry_run:
+            console.print("[cyan]Dry run mode - no changes will be made[/cyan]")
+
+        asyncio.run(_pull(config, entity_type, sync_deletions, dry_run))
 
 
-async def _pull(config: SyncConfig, entity_type: EntityType, sync_deletions: bool) -> None:
+async def _pull(
+    config: SyncConfig, entity_type: EntityType, sync_deletions: bool, dry_run: bool = False
+) -> None:
     """Pull entities from Home Assistant."""
     async with HAClient(config.url, config.token) as client:
         syncers = await get_syncers_with_discovery(client, config, entity_type)
 
         for syncer in syncers:
             console.print(f"\n[bold]Pulling {syncer.entity_type}s...[/bold]")
-            result = await syncer.pull(sync_deletions=sync_deletions)
+            result = await syncer.pull(sync_deletions=sync_deletions, dry_run=dry_run)
 
             if not result.has_changes:
                 console.print("  [dim]No changes[/dim]")
@@ -526,7 +533,10 @@ async def _pull(config: SyncConfig, entity_type: EntityType, sync_deletions: boo
                 console.print(f"  [yellow]Completed with {len(result.errors)} errors[/yellow]")
             else:
                 total = len(result.created) + len(result.updated) + len(result.deleted)
-                console.print(f"  [green]Synced {total} entities[/green]")
+                if dry_run:
+                    console.print(f"  [cyan]Would sync {total} entities[/cyan]")
+                else:
+                    console.print(f"  [green]Synced {total} entities[/green]")
 
 
 @app.command()
@@ -637,18 +647,10 @@ async def _diff(config: SyncConfig, entity_type: EntityType) -> None:
 
         for entity_type_name, item in sorted(all_items, key=lambda x: (x[1].status, x[0])):
             color = status_colors.get(item.status, "white")
+            display_path = item.file_path or item.entity_id
 
             # Header line
-            if item.status == "renamed":
-                console.print(
-                    f"[{color}]{item.status}[/{color}] "
-                    f"[bold]{entity_type_name}[/bold]: {item.entity_id} -> {item.new_id}"
-                )
-            else:
-                console.print(
-                    f"[{color}]{item.status}[/{color}] "
-                    f"[bold]{entity_type_name}[/bold]: {item.entity_id}"
-                )
+            console.print(f"[{color}]{item.status}[/{color}] {display_path}")
 
             # Show diff for modified items
             if item.status == "modified" and item.local and item.remote:
