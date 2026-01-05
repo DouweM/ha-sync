@@ -336,6 +336,7 @@ class TemplateSyncer(BaseSyncer):
         force: bool = False,
         sync_deletions: bool = False,
         dry_run: bool = False,
+        diff_items: list[DiffItem] | None = None,
     ) -> SyncResult:
         """Push local template helpers to Home Assistant."""
         result = SyncResult(created=[], updated=[], deleted=[], renamed=[], errors=[])

@@ -214,6 +214,67 @@ async def get_syncers_for_path(
     return create_syncers_from_specs(specs, client, config)
 
 
+async def get_syncers_for_paths(
+    client: HAClient,
+    config: SyncConfig,
+    paths: list[str] | None,
+) -> list[tuple[BaseSyncer, list[Path] | None]]:
+    """Get syncers for multiple paths, grouping file filters by syncer.
+
+    Returns:
+        List of (syncer, file_filters) tuples where file_filters is None if no filtering needed
+    """
+    if paths is None or len(paths) == 0:
+        # No paths = all syncers, no filtering
+        single_result = await get_syncers_for_path(client, config, None)
+        return [(syncer, None) for syncer, _ in single_result]
+
+    # Discover helper domains if any path needs it
+    discovered: set[str] | None = None
+    if any(p is None or p.rstrip("/") == "helpers" for p in paths):
+        discovered = await discover_helper_domains(client)
+
+    # Collect all specs and group by syncer key
+    from collections import defaultdict
+
+    # Key: (syncer_class, domain) -> list of file_filters
+    syncer_filters: dict[tuple[type[BaseSyncer], str | None], list[Path]] = defaultdict(list)
+    syncer_has_no_filter: set[tuple[type[BaseSyncer], str | None]] = set()
+
+    for path in paths:
+        specs = resolve_path_to_syncers(path, config, discovered)
+        for spec in specs:
+            key = (spec.syncer_class, spec.domain)
+            if spec.file_filter:
+                syncer_filters[key].append(spec.file_filter)
+            else:
+                # This syncer was requested without a filter (e.g., "automations/")
+                syncer_has_no_filter.add(key)
+
+    # Build result: for each syncer, use filters only if ALL requests had filters
+    result: list[tuple[BaseSyncer, list[Path] | None]] = []
+    seen_keys: set[tuple[type[BaseSyncer], str | None]] = set()
+
+    for key in list(syncer_filters.keys()) + list(syncer_has_no_filter):
+        if key in seen_keys:
+            continue
+        seen_keys.add(key)
+
+        syncer_class, domain = key
+        if syncer_class == ConfigEntrySyncer:
+            syncer = ConfigEntrySyncer(client, config, domain or "")
+        else:
+            syncer = syncer_class(client, config)
+
+        # If this syncer was ever requested without a filter, don't filter
+        if key in syncer_has_no_filter:
+            result.append((syncer, None))
+        else:
+            result.append((syncer, syncer_filters[key]))
+
+    return result
+
+
 @app.command()
 def init() -> None:
     """Initialize ha-sync directory structure and check configuration."""
@@ -279,9 +340,9 @@ async def _test_connection(config: SyncConfig) -> None:
 
 @app.command()
 def validate(
-    path: Annotated[
-        str | None,
-        typer.Argument(help="Path to validate (e.g., automations/, helpers/template/)"),
+    paths: Annotated[
+        list[str] | None,
+        typer.Argument(help="Paths to validate (e.g., automations/, helpers/template/)"),
     ] = None,
     check_templates: Annotated[
         bool,
@@ -301,12 +362,12 @@ def validate(
     ] = True,
 ) -> None:
     """Validate local YAML files for errors."""
-    with logfire.span("ha-sync validate", path=path):
-        _validate_impl(path, check_templates, check_config, diff_only)
+    with logfire.span("ha-sync validate", paths=paths):
+        _validate_impl(paths, check_templates, check_config, diff_only)
 
 
 def _validate_impl(
-    path: str | None,
+    paths: list[str] | None,
     check_templates: bool,
     check_config: bool,
     diff_only: bool,
@@ -321,16 +382,25 @@ def _validate_impl(
     templates_to_check: list[tuple[str, str, str]] = []  # (file, path, template)
     files_checked = 0
 
-    # Resolve path to determine what to validate
-    specs = resolve_path_to_syncers(path, config, None)
-    syncer_classes = {spec.syncer_class for spec in specs}
-    file_filter = specs[0].file_filter if len(specs) == 1 and specs[0].file_filter else None
+    # Resolve paths to determine what to validate
+    all_specs: list[SyncerSpec] = []
+    all_file_filters: list[Path] = []
+    for path in paths or [None]:
+        specs = resolve_path_to_syncers(path, config, None)
+        all_specs.extend(specs)
+        for spec in specs:
+            if spec.file_filter:
+                all_file_filters.append(spec.file_filter)
+    # Deduplicate syncer classes
+    syncer_classes = {spec.syncer_class for spec in all_specs}
+    # Use file filters only if all paths had specific filters
+    file_filters = all_file_filters if all_file_filters else None
 
     # Get changed files if diff_only mode
     changed_files: set[str] = set()
     if check_templates and diff_only and config.url and config.token:
         console.print("[dim]Getting diff to find changed files...[/dim]")
-        diff_items = asyncio.run(_get_diff_items(config, path))
+        diff_items = asyncio.run(_get_diff_items(config, paths))
         for item in diff_items:
             # Collect file paths from changed items
             if item.status in ("added", "modified", "renamed") and item.file_path:
@@ -397,15 +467,18 @@ def _validate_impl(
     console.print("[bold]Validating local files...[/bold]\n")
 
     def should_validate_file(file_path: Path) -> bool:
-        """Check if file matches the filter."""
-        if file_filter is None:
+        """Check if file matches any of the filters."""
+        if file_filters is None:
             return True
-        # Check if file path matches the filter (is under the filter path or matches it)
-        try:
-            file_path.relative_to(file_filter)
-            return True
-        except ValueError:
-            return str(file_path) == str(file_filter) or str(file_path).endswith(str(file_filter))
+        # Check if file path matches any filter (is under the filter path or matches it)
+        for file_filter in file_filters:
+            try:
+                file_path.relative_to(file_filter)
+                return True
+            except ValueError:
+                if str(file_path) == str(file_filter) or str(file_path).endswith(str(file_filter)):
+                    return True
+        return False
 
     # Validate automations
     if AutomationSyncer in syncer_classes:
@@ -577,19 +650,20 @@ async def _check_ha_config(config: SyncConfig) -> dict:
         return await client.check_config()
 
 
-async def _get_diff_items(config: SyncConfig, path: str | None) -> list[DiffItem]:
-    """Get diff items for the specified path."""
+async def _get_diff_items(config: SyncConfig, paths: list[str] | None) -> list[DiffItem]:
+    """Get diff items for the specified paths."""
     items: list[DiffItem] = []
     async with HAClient(config.url, config.token) as client:
-        syncers_with_filters = await get_syncers_for_path(client, config, path)
-        for syncer, file_filter in syncers_with_filters:
+        syncers_with_filters = await get_syncers_for_paths(client, config, paths)
+        for syncer, file_filters in syncers_with_filters:
             syncer_items = await syncer.diff()
-            # Filter items if file_filter is set
-            if file_filter:
+            # Filter items if file_filters is set
+            if file_filters:
                 syncer_items = [
                     item
                     for item in syncer_items
-                    if item.file_path and _matches_filter(item.file_path, file_filter)
+                    if item.file_path
+                    and any(_matches_filter(item.file_path, f) for f in file_filters)
                 ]
             items.extend(syncer_items)
     return items
@@ -770,9 +844,9 @@ def _handle_stash_pop(stashed: bool) -> bool:
 
 @app.command()
 def pull(
-    path: Annotated[
-        str | None,
-        typer.Argument(help="Path to pull (e.g., automations/, helpers/template/)"),
+    paths: Annotated[
+        list[str] | None,
+        typer.Argument(help="Paths to pull (e.g., automations/, helpers/template/)"),
     ] = None,
     sync_deletions: Annotated[
         bool,
@@ -793,7 +867,7 @@ def pull(
     before pull and restores after (no confirmation needed). Outside git, asks for
     confirmation since local changes can't be recovered.
     """
-    with logfire.span("ha-sync pull", path=path, dry_run=dry_run, yes=yes):
+    with logfire.span("ha-sync pull", paths=paths, dry_run=dry_run, yes=yes):
         config = get_config()
         if not config.url or not config.token:
             console.print("[red]Missing HA_URL or HA_TOKEN.[/red] Set them in .env file.")
@@ -801,12 +875,12 @@ def pull(
 
         if dry_run:
             console.print("[cyan]Dry run mode - no changes will be made[/cyan]\n")
-            asyncio.run(_pull(config, path, sync_deletions, dry_run=True))
+            asyncio.run(_pull(config, paths, sync_deletions, dry_run=True))
             return
 
         # Get diff preview
         console.print("[bold]Fetching changes from Home Assistant...[/bold]\n")
-        diff_items = asyncio.run(_get_pull_diff(config, path, sync_deletions))
+        diff_items = asyncio.run(_get_pull_diff(config, paths, sync_deletions))
 
         if not diff_items:
             console.print("[dim]No changes to pull[/dim]")
@@ -823,23 +897,23 @@ def pull(
                 console.print("[dim]Aborted[/dim]")
                 raise typer.Exit(0)
             console.print()
-            asyncio.run(_pull(config, path, sync_deletions, dry_run=False))
+            asyncio.run(_pull(config, paths, sync_deletions, dry_run=False))
         else:
             # In git - autostash handles recovery, no confirmation needed
             _, stashed = _handle_autostash(skip_stash=yes)
             console.print()
-            asyncio.run(_pull(config, path, sync_deletions, dry_run=False))
+            asyncio.run(_pull(config, paths, sync_deletions, dry_run=False))
             _handle_stash_pop(stashed)
 
 
 async def _get_pull_diff(
-    config: SyncConfig, path: str | None, sync_deletions: bool
+    config: SyncConfig, paths: list[str] | None, sync_deletions: bool
 ) -> list[DiffItem]:
     """Get diff items for pull operation (what remote has that differs from local)."""
     items: list[DiffItem] = []
     async with HAClient(config.url, config.token) as client:
-        syncers_with_filters = await get_syncers_for_path(client, config, path)
-        for syncer, file_filter in syncers_with_filters:
+        syncers_with_filters = await get_syncers_for_paths(client, config, paths)
+        for syncer, file_filters in syncers_with_filters:
             syncer_items = await syncer.diff()
             # For pull, we care about:
             # - "deleted" items = remote has something local doesn't (will create locally)
@@ -872,24 +946,25 @@ async def _get_pull_diff(
                         )
                     )
 
-            if file_filter:
+            if file_filters:
                 pull_items = [
                     item
                     for item in pull_items
-                    if item.file_path and _matches_filter(item.file_path, file_filter)
+                    if item.file_path
+                    and any(_matches_filter(item.file_path, f) for f in file_filters)
                 ]
             items.extend(pull_items)
     return items
 
 
 async def _pull(
-    config: SyncConfig, path: str | None, sync_deletions: bool, dry_run: bool = False
+    config: SyncConfig, paths: list[str] | None, sync_deletions: bool, dry_run: bool = False
 ) -> None:
     """Pull entities from Home Assistant."""
     async with HAClient(config.url, config.token) as client:
-        syncers_with_filters = await get_syncers_for_path(client, config, path)
+        syncers_with_filters = await get_syncers_for_paths(client, config, paths)
 
-        for syncer, _file_filter in syncers_with_filters:
+        for syncer, _file_filters in syncers_with_filters:
             console.print(f"\n[bold]Pulling {syncer.entity_type}s...[/bold]")
             result = await syncer.pull(sync_deletions=sync_deletions, dry_run=dry_run)
 
@@ -907,9 +982,9 @@ async def _pull(
 
 @app.command()
 def push(
-    path: Annotated[
-        str | None,
-        typer.Argument(help="Path to push (e.g., automations/, helpers/template/)"),
+    paths: Annotated[
+        list[str] | None,
+        typer.Argument(help="Paths to push (e.g., automations/, helpers/template/)"),
     ] = None,
     all_items: Annotated[
         bool,
@@ -932,7 +1007,7 @@ def push(
 
     By default, shows a preview of changes and asks for confirmation.
     """
-    with logfire.span("ha-sync push", path=path, all=all_items, dry_run=dry_run, yes=yes):
+    with logfire.span("ha-sync push", paths=paths, all=all_items, dry_run=dry_run, yes=yes):
         config = get_config()
         if not config.url or not config.token:
             console.print("[red]Missing HA_URL or HA_TOKEN.[/red] Set them in .env file.")
@@ -940,12 +1015,12 @@ def push(
 
         if dry_run:
             console.print("[cyan]Dry run mode - no changes will be made[/cyan]\n")
-            asyncio.run(_push(config, path, all_items, sync_deletions, dry_run=True))
+            asyncio.run(_push(config, paths, all_items, sync_deletions, dry_run=True))
             return
 
         # Get diff preview
         console.print("[bold]Comparing local files with Home Assistant...[/bold]\n")
-        diff_items = asyncio.run(_get_push_diff(config, path, all_items, sync_deletions))
+        diff_items = asyncio.run(_get_push_diff(config, paths, all_items, sync_deletions))
 
         if not diff_items:
             console.print("[dim]No changes to push[/dim]")
@@ -961,17 +1036,17 @@ def push(
 
         # Execute push
         console.print()
-        asyncio.run(_push(config, path, all_items, sync_deletions, dry_run=False))
+        asyncio.run(_push(config, paths, all_items, sync_deletions, dry_run=False))
 
 
 async def _get_push_diff(
-    config: SyncConfig, path: str | None, all_items: bool, sync_deletions: bool
+    config: SyncConfig, paths: list[str] | None, all_items: bool, sync_deletions: bool
 ) -> list[DiffItem]:
     """Get diff items for push operation."""
     items: list[DiffItem] = []
     async with HAClient(config.url, config.token) as client:
-        syncers_with_filters = await get_syncers_for_path(client, config, path)
-        for syncer, file_filter in syncers_with_filters:
+        syncers_with_filters = await get_syncers_for_paths(client, config, paths)
+        for syncer, file_filters in syncers_with_filters:
             syncer_items = await syncer.diff()
 
             # Filter based on what push would actually do
@@ -983,11 +1058,12 @@ async def _get_push_diff(
                 if include:
                     push_items.append(item)
 
-            if file_filter:
+            if file_filters:
                 push_items = [
                     item
                     for item in push_items
-                    if item.file_path and _matches_filter(item.file_path, file_filter)
+                    if item.file_path
+                    and any(_matches_filter(item.file_path, f) for f in file_filters)
                 ]
             items.extend(push_items)
     return items
@@ -995,19 +1071,36 @@ async def _get_push_diff(
 
 async def _push(
     config: SyncConfig,
-    path: str | None,
+    paths: list[str] | None,
     all_items: bool,
     sync_deletions: bool,
     dry_run: bool,
+    diff_items: list[DiffItem] | None = None,
 ) -> None:
-    """Push entities to Home Assistant."""
-    async with HAClient(config.url, config.token) as client:
-        syncers_with_filters = await get_syncers_for_path(client, config, path)
+    """Push entities to Home Assistant.
 
-        for syncer, _file_filter in syncers_with_filters:
+    Args:
+        diff_items: Pre-computed diff items to use (skips API call if provided).
+    """
+    # Group diff_items by entity_type if provided
+    items_by_type: dict[str, list[DiffItem]] = {}
+    if diff_items:
+        for item in diff_items:
+            items_by_type.setdefault(item.entity_type, []).append(item)
+
+    async with HAClient(config.url, config.token) as client:
+        syncers_with_filters = await get_syncers_for_paths(client, config, paths)
+
+        for syncer, _file_filters in syncers_with_filters:
+            # Get pre-computed items for this syncer's entity type
+            syncer_items = items_by_type.get(syncer.entity_type) if diff_items else None
+
             console.print(f"\n[bold]Pushing {syncer.entity_type}s...[/bold]")
             result = await syncer.push(
-                force=all_items, sync_deletions=sync_deletions, dry_run=dry_run
+                force=all_items,
+                sync_deletions=sync_deletions,
+                dry_run=dry_run,
+                diff_items=syncer_items,
             )
 
             if not result.has_changes:
@@ -1026,39 +1119,40 @@ async def _push(
 
 @app.command()
 def diff(
-    path: Annotated[
-        str | None,
-        typer.Argument(help="Path to diff (e.g., automations/, helpers/template/)"),
+    paths: Annotated[
+        list[str] | None,
+        typer.Argument(help="Paths to diff (e.g., automations/, helpers/template/)"),
     ] = None,
 ) -> None:
     """Show differences between local and remote."""
-    with logfire.span("ha-sync diff", path=path):
+    with logfire.span("ha-sync diff", paths=paths):
         config = get_config()
         if not config.url or not config.token:
             console.print("[red]Missing HA_URL or HA_TOKEN.[/red] Set them in .env file.")
             raise typer.Exit(1)
 
-        asyncio.run(_diff(config, path))
+        asyncio.run(_diff(config, paths))
 
 
-async def _diff(config: SyncConfig, path: str | None) -> None:
+async def _diff(config: SyncConfig, paths: list[str] | None) -> None:
     """Show differences between local and remote."""
     import difflib
 
     from ha_sync.utils import dump_yaml
 
     async with HAClient(config.url, config.token) as client:
-        syncers_with_filters = await get_syncers_for_path(client, config, path)
+        syncers_with_filters = await get_syncers_for_paths(client, config, paths)
         all_items: list[tuple[str, DiffItem]] = []
 
-        for syncer, file_filter in syncers_with_filters:
+        for syncer, file_filters in syncers_with_filters:
             items = await syncer.diff()
-            # Filter items if file_filter is set
-            if file_filter:
+            # Filter items if file_filters is set
+            if file_filters:
                 items = [
                     item
                     for item in items
-                    if item.file_path and _matches_filter(item.file_path, file_filter)
+                    if item.file_path
+                    and any(_matches_filter(item.file_path, f) for f in file_filters)
                 ]
             for item in items:
                 all_items.append((syncer.entity_type, item))
@@ -1363,9 +1457,9 @@ async def _state(config: SyncConfig, entity: str) -> None:
 
 @app.command()
 def sync(
-    path: Annotated[
-        str | None,
-        typer.Argument(help="Path to sync (e.g., automations/, helpers/template/)"),
+    paths: Annotated[
+        list[str] | None,
+        typer.Argument(help="Paths to sync (e.g., automations/, helpers/template/)"),
     ] = None,
     sync_deletions: Annotated[
         bool,
@@ -1387,7 +1481,7 @@ def sync(
     If conflicts are detected after restoring the stash, the command stops
     and asks you to resolve them manually before pushing.
     """
-    with logfire.span("ha-sync sync", path=path, yes=yes):
+    with logfire.span("ha-sync sync", paths=paths, yes=yes):
         config = get_config()
         if not config.url or not config.token:
             console.print("[red]Missing HA_URL or HA_TOKEN.[/red] Set them in .env file.")
@@ -1411,7 +1505,7 @@ def sync(
 
         # Step 1: Show remote changes (will be pulled first)
         console.print("[bold]Remote changes (will be pulled):[/bold]\n")
-        pull_diff = asyncio.run(_get_pull_diff(config, path, sync_deletions))
+        pull_diff = asyncio.run(_get_pull_diff(config, paths, sync_deletions))
 
         if pull_diff:
             _display_diff_items(pull_diff, direction="pull")
@@ -1424,7 +1518,7 @@ def sync(
         if has_local_changes:
             console.print("[bold]Your uncommitted changes (will be pushed after merge):[/bold]\n")
             push_diff = asyncio.run(
-                _get_push_diff(config, path, all_items=False, sync_deletions=sync_deletions)
+                _get_push_diff(config, paths, all_items=False, sync_deletions=sync_deletions)
             )
             if push_diff:
                 _display_diff_items(push_diff, direction="push")
@@ -1441,7 +1535,7 @@ def sync(
         # If only remote changes (no local changes), just pull without confirmation
         if pull_diff and not push_diff:
             console.print("[bold]Pulling from Home Assistant...[/bold]")
-            asyncio.run(_pull(config, path, sync_deletions, dry_run=False))
+            asyncio.run(_pull(config, paths, sync_deletions, dry_run=False))
             console.print("\n[green]Sync complete![/green]")
             return
 
@@ -1472,7 +1566,7 @@ def sync(
         # Execute pull
         if pull_diff:
             console.print("\n[bold]Pulling from Home Assistant...[/bold]")
-            asyncio.run(_pull(config, path, sync_deletions, dry_run=False))
+            asyncio.run(_pull(config, paths, sync_deletions, dry_run=False))
 
         # Restore stash
         if stashed:
@@ -1493,13 +1587,22 @@ def sync(
         # Step 4: Push (re-calculate diff after pull + stash pop)
         console.print("\n[bold]Checking for changes to push...[/bold]")
         push_diff_after = asyncio.run(
-            _get_push_diff(config, path, all_items=False, sync_deletions=sync_deletions)
+            _get_push_diff(config, paths, all_items=False, sync_deletions=sync_deletions)
         )
 
         if push_diff_after:
+            # Only push the specific paths that have changes, with pre-computed diff
+            changed_paths = list({item.file_path for item in push_diff_after if item.file_path})
             console.print("\n[bold]Pushing to Home Assistant...[/bold]")
             asyncio.run(
-                _push(config, path, all_items=False, sync_deletions=sync_deletions, dry_run=False)
+                _push(
+                    config,
+                    changed_paths,
+                    all_items=False,
+                    sync_deletions=sync_deletions,
+                    dry_run=False,
+                    diff_items=push_diff_after,
+                )
             )
         else:
             console.print("[dim]No changes to push after merge[/dim]")

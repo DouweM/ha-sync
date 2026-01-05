@@ -345,6 +345,7 @@ class DashboardSyncer(BaseSyncer):
         force: bool = False,
         sync_deletions: bool = False,
         dry_run: bool = False,
+        diff_items: list[DiffItem] | None = None,
     ) -> SyncResult:
         """Push local dashboards to Home Assistant."""
         result = SyncResult(created=[], updated=[], deleted=[], renamed=[], errors=[])

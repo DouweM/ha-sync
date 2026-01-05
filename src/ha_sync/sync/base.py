@@ -41,6 +41,7 @@ class DiffItem:
 
     entity_id: str
     status: str  # 'added', 'modified', 'deleted', 'renamed'
+    entity_type: str = ""  # Type of entity (e.g., 'automation', 'script')
     local: dict[str, Any] | None = None
     remote: dict[str, Any] | None = None
     new_id: str | None = None  # For renames
@@ -78,8 +79,13 @@ class BaseSyncer(ABC):
         force: bool = False,
         sync_deletions: bool = False,
         dry_run: bool = False,
+        diff_items: list[DiffItem] | None = None,
     ) -> SyncResult:
-        """Push local files to Home Assistant."""
+        """Push local files to Home Assistant.
+
+        Args:
+            diff_items: Pre-computed diff items (skips API call if provided).
+        """
         ...
 
     @abstractmethod
@@ -258,18 +264,37 @@ class SimpleEntitySyncer(BaseSyncer):
         force: bool = False,
         sync_deletions: bool = False,
         dry_run: bool = False,
+        diff_items: list[DiffItem] | None = None,
     ) -> SyncResult:
-        """Push local entities to Home Assistant."""
+        """Push local entities to Home Assistant.
+
+        Args:
+            force: Push all local entities regardless of changes.
+            sync_deletions: Also delete remote entities not in local.
+            dry_run: Only show what would be done.
+            diff_items: Pre-computed diff items to use (skips API call if provided).
+                       Ignored when force=True.
+        """
         with logfire.span(
             "Push {entity_type}s", entity_type=self.entity_type, force=force, dry_run=dry_run
         ):
             result = SyncResult(created=[], updated=[], deleted=[], renamed=[], errors=[])
 
             local = self.get_local_entities()
-            remote = await self.get_remote_entities()
 
-            # Get diff to determine what needs syncing (pass remote to avoid re-fetching)
-            diff_items = await self.diff(remote=remote)
+            # If force mode or no pre-computed diff, fetch remote and compute diff
+            if force or diff_items is None:
+                remote = await self.get_remote_entities()
+                diff_items = await self.diff(remote=remote)
+                remote_ids = set(remote.keys())
+            else:
+                # Derive remote_ids from diff_items status
+                # Items with status modified, deleted, or renamed exist in remote
+                remote_ids = {
+                    item.entity_id for item in diff_items
+                    if item.status in ("modified", "deleted", "renamed")
+                }
+                remote = None  # Not fetched when using pre-computed diff
 
             # Track processed items to avoid double-processing
             processed_ids: set[str] = set()
@@ -336,7 +361,7 @@ class SimpleEntitySyncer(BaseSyncer):
                 file_path = self.local_path / filename
                 rel_path = relative_path(file_path)
 
-                is_update = entity_id in remote
+                is_update = entity_id in remote_ids
 
                 try:
                     if dry_run:
@@ -361,20 +386,22 @@ class SimpleEntitySyncer(BaseSyncer):
             # Process deletions
             if sync_deletions:
                 if force:
-                    # Force mode: delete all remote items not in local
-                    items_to_delete = [
-                        eid for eid in remote if eid not in local and eid not in processed_ids
+                    # Force mode: delete all remote items not in local (requires remote dict)
+                    assert remote is not None
+                    items_to_delete: list[tuple[str, str]] = [
+                        (eid, relative_path(self.local_path / self.get_filename(eid, remote[eid])))
+                        for eid in remote
+                        if eid not in local and eid not in processed_ids
                     ]
                 else:
-                    # Normal mode: only items from diff
+                    # Normal mode: use diff_items (may have pre-computed file_path)
                     items_to_delete = [
-                        item.entity_id for item in diff_items if item.status == "deleted"
+                        (item.entity_id, item.file_path or item.entity_id)
+                        for item in diff_items
+                        if item.status == "deleted"
                     ]
 
-                for entity_id in items_to_delete:
-                    filename = self.get_filename(entity_id, remote.get(entity_id, {}))
-                    file_path = self.local_path / filename
-                    rel_path = relative_path(file_path)
+                for entity_id, rel_path in items_to_delete:
                     try:
                         if dry_run:
                             console.print(f"  [cyan]Would delete[/cyan] {rel_path}")
@@ -394,7 +421,13 @@ class SimpleEntitySyncer(BaseSyncer):
                         )
             else:
                 # Warn about remote items without local counterpart
-                orphaned = [eid for eid in remote if eid not in local and eid not in processed_ids]
+                if remote is not None:
+                    orphaned = [
+                        eid for eid in remote if eid not in local and eid not in processed_ids
+                    ]
+                else:
+                    # When using pre-computed diff, count deleted items
+                    orphaned = [item.entity_id for item in diff_items if item.status == "deleted"]
                 if orphaned:
                     console.print(
                         f"  [dim]{len(orphaned)} remote item(s) not in local files "
@@ -442,6 +475,7 @@ class SimpleEntitySyncer(BaseSyncer):
                     DiffItem(
                         entity_id=old_id,
                         status="renamed",
+                        entity_type=self.entity_type,
                         local=local.get(new_id),
                         remote=remote.get(old_id),
                         new_id=new_id,
@@ -464,6 +498,7 @@ class SimpleEntitySyncer(BaseSyncer):
                         DiffItem(
                             entity_id=entity_id,
                             status="added",
+                            entity_type=self.entity_type,
                             local=local_clean,
                             file_path=relative_path(file_path),
                         )
@@ -478,6 +513,7 @@ class SimpleEntitySyncer(BaseSyncer):
                             DiffItem(
                                 entity_id=entity_id,
                                 status="modified",
+                                entity_type=self.entity_type,
                                 local=local_normalized,
                                 remote=remote_normalized,
                                 file_path=relative_path(file_path),
@@ -493,6 +529,7 @@ class SimpleEntitySyncer(BaseSyncer):
                         DiffItem(
                             entity_id=entity_id,
                             status="deleted",
+                            entity_type=self.entity_type,
                             remote=remote[entity_id],
                             file_path=relative_path(file_path),
                         )
