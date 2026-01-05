@@ -28,6 +28,13 @@ from ha_sync.sync.config_entries import (
     ConfigEntrySyncer,
     discover_helper_domains,
 )
+from ha_sync.utils import (
+    MANAGED_FOLDERS,
+    dump_yaml,
+    git_stash,
+    git_stash_pop,
+    is_git_repo,
+)
 
 # Configure logfire (must be after imports to ensure proper instrumentation)
 logfire.configure(service_name="ha-sync", send_to_logfire="if-token-present", console=False)
@@ -594,6 +601,173 @@ def _matches_filter(file_path: str, file_filter: Path) -> bool:
     return file_path.startswith(filter_str) or file_path == filter_str
 
 
+def _display_diff_items(items: list[DiffItem], direction: str = "push") -> None:
+    """Display diff items with content diffs for modified items.
+
+    Args:
+        items: List of diff items to display
+        direction: "push" (local -> remote) or "pull" (remote -> local)
+    """
+    import difflib
+
+    if not items:
+        console.print("[dim]No changes[/dim]")
+        return
+
+    status_colors = {
+        "added": "green",
+        "modified": "yellow",
+        "deleted": "red",
+        "renamed": "blue",
+    }
+
+    # For pull, swap the semantics: "added" means remote has it, local doesn't
+    # "deleted" means local has it, remote doesn't
+    if direction == "pull":
+        status_labels = {
+            "added": "create",  # Will create locally
+            "modified": "update",  # Will update locally
+            "deleted": "delete",  # Will delete locally (if --sync-deletions)
+            "renamed": "rename",
+        }
+    else:
+        status_labels = {
+            "added": "create",  # Will create remotely
+            "modified": "update",  # Will update remotely
+            "deleted": "delete",  # Will delete remotely (if --sync-deletions)
+            "renamed": "rename",
+        }
+
+    for item in sorted(items, key=lambda x: (x.status, x.file_path or x.entity_id)):
+        color = status_colors.get(item.status, "white")
+        label = status_labels.get(item.status, item.status)
+        display_path = item.file_path or item.entity_id
+
+        console.print(f"[{color}]{label}[/{color}] {display_path}")
+
+        # Show diff for modified items
+        if item.status == "modified" and item.local and item.remote:
+            if direction == "pull":
+                # Pull: remote -> local, show what local will become
+                from_yaml = dump_yaml(item.local).splitlines(keepends=True)
+                to_yaml = dump_yaml(item.remote).splitlines(keepends=True)
+                from_label, to_label = "local", "remote"
+            else:
+                # Push: local -> remote, show what remote will become
+                from_yaml = dump_yaml(item.remote).splitlines(keepends=True)
+                to_yaml = dump_yaml(item.local).splitlines(keepends=True)
+                from_label, to_label = "remote", "local"
+
+            diff_lines = list(
+                difflib.unified_diff(
+                    from_yaml,
+                    to_yaml,
+                    fromfile=from_label,
+                    tofile=to_label,
+                    lineterm="",
+                )
+            )
+
+            if diff_lines:
+                for line in diff_lines:
+                    line = line.rstrip("\n")
+                    if line.startswith("+++") or line.startswith("---"):
+                        console.print(f"  [dim]{line}[/dim]")
+                    elif line.startswith("@@"):
+                        console.print(f"  [cyan]{line}[/cyan]")
+                    elif line.startswith("+"):
+                        console.print(f"  [green]{line}[/green]")
+                    elif line.startswith("-"):
+                        console.print(f"  [red]{line}[/red]")
+                    else:
+                        console.print(f"  [dim]{line}[/dim]")
+
+        # Show content for added items
+        elif item.status == "added":
+            content = item.remote if direction == "pull" else item.local
+            if content:
+                content_yaml = dump_yaml(content)
+                for line in content_yaml.splitlines():
+                    console.print(f"  [green]+{line}[/green]")
+
+        # Show content for deleted items
+        elif item.status == "deleted":
+            content = item.local if direction == "pull" else item.remote
+            if content:
+                content_yaml = dump_yaml(content)
+                for line in content_yaml.splitlines():
+                    console.print(f"  [red]-{line}[/red]")
+
+        console.print()  # Blank line between items
+
+
+def _ask_confirmation(action: str = "proceed") -> bool:
+    """Ask user for confirmation.
+
+    Args:
+        action: Description of what will happen (e.g., "proceed", "push changes")
+
+    Returns:
+        True if user confirms, False otherwise
+    """
+    try:
+        response = console.input(f"[bold]Do you want to {action}?[/bold] [y/N] ")
+        return response.lower() in ("y", "yes")
+    except (EOFError, KeyboardInterrupt):
+        console.print()
+        return False
+
+
+def _handle_autostash(skip_stash: bool) -> tuple[bool, bool]:
+    """Handle git autostash if in a git repo.
+
+    Only stashes changes in ha-sync managed folders (automations, scripts, etc.).
+
+    Args:
+        skip_stash: If True, skip stashing entirely
+
+    Returns:
+        Tuple of (is_git, stashed) - whether we're in git and whether we stashed
+    """
+    if skip_stash:
+        return False, False
+
+    if not is_git_repo():
+        return False, False
+
+    stash_result = git_stash(MANAGED_FOLDERS)
+    if stash_result.stashed:
+        console.print("[dim]Stashed local changes in managed folders[/dim]")
+        return True, True
+    return True, False
+
+
+def _handle_stash_pop(stashed: bool) -> bool:
+    """Pop stashed changes and check for conflicts.
+
+    Args:
+        stashed: Whether we previously stashed
+
+    Returns:
+        True if successful (no conflicts), False if conflicts detected
+    """
+    if not stashed:
+        return True
+
+    pop_result = git_stash_pop()
+    if pop_result.success:
+        console.print("[dim]Restored stashed changes[/dim]")
+        return True
+
+    if pop_result.has_conflicts:
+        console.print("[yellow]Conflicts detected after restoring stashed changes.[/yellow]")
+        console.print("[yellow]Resolve conflicts before pushing.[/yellow]")
+        return False
+
+    console.print(f"[red]Error restoring stash:[/red] {pop_result.message}")
+    return False
+
+
 @app.command()
 def pull(
     path: Annotated[
@@ -604,22 +778,108 @@ def pull(
         bool,
         typer.Option("--sync-deletions", help="Delete local files not in Home Assistant"),
     ] = False,
+    yes: Annotated[
+        bool,
+        typer.Option("--yes", "-y", help="Skip confirmation and autostash"),
+    ] = False,
     dry_run: Annotated[
         bool,
         typer.Option("--dry-run", "-n", help="Show what would be done without making changes"),
     ] = False,
 ) -> None:
-    """Pull entities from Home Assistant to local files."""
-    with logfire.span("ha-sync pull", path=path, dry_run=dry_run):
+    """Pull entities from Home Assistant to local files.
+
+    Shows a preview of changes. In a git repo, automatically stashes local changes
+    before pull and restores after (no confirmation needed). Outside git, asks for
+    confirmation since local changes can't be recovered.
+    """
+    with logfire.span("ha-sync pull", path=path, dry_run=dry_run, yes=yes):
         config = get_config()
         if not config.url or not config.token:
             console.print("[red]Missing HA_URL or HA_TOKEN.[/red] Set them in .env file.")
             raise typer.Exit(1)
 
         if dry_run:
-            console.print("[cyan]Dry run mode - no changes will be made[/cyan]")
+            console.print("[cyan]Dry run mode - no changes will be made[/cyan]\n")
+            asyncio.run(_pull(config, path, sync_deletions, dry_run=True))
+            return
 
-        asyncio.run(_pull(config, path, sync_deletions, dry_run))
+        # Get diff preview
+        console.print("[bold]Fetching changes from Home Assistant...[/bold]\n")
+        diff_items = asyncio.run(_get_pull_diff(config, path, sync_deletions))
+
+        if not diff_items:
+            console.print("[dim]No changes to pull[/dim]")
+            return
+
+        # Show preview
+        _display_diff_items(diff_items, direction="pull")
+
+        in_git = is_git_repo()
+
+        if not in_git:
+            # Not in git - ask for confirmation since we can't recover overwritten files
+            if not yes and not _ask_confirmation("pull these changes"):
+                console.print("[dim]Aborted[/dim]")
+                raise typer.Exit(0)
+            console.print()
+            asyncio.run(_pull(config, path, sync_deletions, dry_run=False))
+        else:
+            # In git - autostash handles recovery, no confirmation needed
+            _, stashed = _handle_autostash(skip_stash=yes)
+            console.print()
+            asyncio.run(_pull(config, path, sync_deletions, dry_run=False))
+            _handle_stash_pop(stashed)
+
+
+async def _get_pull_diff(
+    config: SyncConfig, path: str | None, sync_deletions: bool
+) -> list[DiffItem]:
+    """Get diff items for pull operation (what remote has that differs from local)."""
+    items: list[DiffItem] = []
+    async with HAClient(config.url, config.token) as client:
+        syncers_with_filters = await get_syncers_for_path(client, config, path)
+        for syncer, file_filter in syncers_with_filters:
+            syncer_items = await syncer.diff()
+            # For pull, we care about:
+            # - "deleted" items = remote has something local doesn't (will create locally)
+            # - "modified" items = both have it but different (will update locally)
+            # - "added" items = local has something remote doesn't (will delete if sync_deletions)
+            pull_items = []
+            for item in syncer_items:
+                if item.status == "deleted":
+                    # Remote has it, local doesn't -> will create locally
+                    pull_items.append(
+                        DiffItem(
+                            entity_id=item.entity_id,
+                            status="added",  # Flip: it's an "add" from pull perspective
+                            local=item.local,
+                            remote=item.remote,
+                            file_path=item.file_path,
+                        )
+                    )
+                elif item.status == "modified":
+                    pull_items.append(item)
+                elif item.status == "added" and sync_deletions:
+                    # Local has it, remote doesn't -> will delete locally if sync_deletions
+                    pull_items.append(
+                        DiffItem(
+                            entity_id=item.entity_id,
+                            status="deleted",  # Flip: it's a "delete" from pull perspective
+                            local=item.local,
+                            remote=item.remote,
+                            file_path=item.file_path,
+                        )
+                    )
+
+            if file_filter:
+                pull_items = [
+                    item
+                    for item in pull_items
+                    if item.file_path and _matches_filter(item.file_path, file_filter)
+                ]
+            items.extend(pull_items)
+    return items
 
 
 async def _pull(
@@ -651,36 +911,92 @@ def push(
         str | None,
         typer.Argument(help="Path to push (e.g., automations/, helpers/template/)"),
     ] = None,
-    force: Annotated[
+    all_items: Annotated[
         bool,
-        typer.Option("--force", "-f", help="Push all local items, not just changed ones"),
+        typer.Option("--all", "-a", help="Push all local items, not just changed ones"),
     ] = False,
     sync_deletions: Annotated[
         bool,
         typer.Option("--sync-deletions", help="Delete remote entities not in local files"),
+    ] = False,
+    yes: Annotated[
+        bool,
+        typer.Option("--yes", "-y", help="Skip confirmation"),
     ] = False,
     dry_run: Annotated[
         bool,
         typer.Option("--dry-run", "-n", help="Show what would be done without making changes"),
     ] = False,
 ) -> None:
-    """Push local files to Home Assistant."""
-    with logfire.span("ha-sync push", path=path, force=force, dry_run=dry_run):
+    """Push local files to Home Assistant.
+
+    By default, shows a preview of changes and asks for confirmation.
+    """
+    with logfire.span("ha-sync push", path=path, all=all_items, dry_run=dry_run, yes=yes):
         config = get_config()
         if not config.url or not config.token:
             console.print("[red]Missing HA_URL or HA_TOKEN.[/red] Set them in .env file.")
             raise typer.Exit(1)
 
         if dry_run:
-            console.print("[cyan]Dry run mode - no changes will be made[/cyan]")
+            console.print("[cyan]Dry run mode - no changes will be made[/cyan]\n")
+            asyncio.run(_push(config, path, all_items, sync_deletions, dry_run=True))
+            return
 
-        asyncio.run(_push(config, path, force, sync_deletions, dry_run))
+        # Get diff preview
+        console.print("[bold]Comparing local files with Home Assistant...[/bold]\n")
+        diff_items = asyncio.run(_get_push_diff(config, path, all_items, sync_deletions))
+
+        if not diff_items:
+            console.print("[dim]No changes to push[/dim]")
+            return
+
+        # Show preview
+        _display_diff_items(diff_items, direction="push")
+
+        # Ask for confirmation unless --yes
+        if not yes and not _ask_confirmation("push these changes"):
+            console.print("[dim]Aborted[/dim]")
+            raise typer.Exit(0)
+
+        # Execute push
+        console.print()
+        asyncio.run(_push(config, path, all_items, sync_deletions, dry_run=False))
+
+
+async def _get_push_diff(
+    config: SyncConfig, path: str | None, all_items: bool, sync_deletions: bool
+) -> list[DiffItem]:
+    """Get diff items for push operation."""
+    items: list[DiffItem] = []
+    async with HAClient(config.url, config.token) as client:
+        syncers_with_filters = await get_syncers_for_path(client, config, path)
+        for syncer, file_filter in syncers_with_filters:
+            syncer_items = await syncer.diff()
+
+            # Filter based on what push would actually do
+            push_items = []
+            for item in syncer_items:
+                # Include renames, adds, modifies; deletes only if sync_deletions
+                include = item.status in ("renamed", "added", "modified")
+                include = include or (item.status == "deleted" and sync_deletions)
+                if include:
+                    push_items.append(item)
+
+            if file_filter:
+                push_items = [
+                    item
+                    for item in push_items
+                    if item.file_path and _matches_filter(item.file_path, file_filter)
+                ]
+            items.extend(push_items)
+    return items
 
 
 async def _push(
     config: SyncConfig,
     path: str | None,
-    force: bool,
+    all_items: bool,
     sync_deletions: bool,
     dry_run: bool,
 ) -> None:
@@ -690,7 +1006,9 @@ async def _push(
 
         for syncer, _file_filter in syncers_with_filters:
             console.print(f"\n[bold]Pushing {syncer.entity_type}s...[/bold]")
-            result = await syncer.push(force=force, sync_deletions=sync_deletions, dry_run=dry_run)
+            result = await syncer.push(
+                force=all_items, sync_deletions=sync_deletions, dry_run=dry_run
+            )
 
             if not result.has_changes:
                 console.print("  [dim]No changes[/dim]")
@@ -805,50 +1123,6 @@ async def _diff(config: SyncConfig, path: str | None) -> None:
                     console.print(f"[red]-{line}[/red]")
 
             console.print()  # Blank line between items
-
-
-@app.command()
-def watch(
-    path: Annotated[
-        str | None,
-        typer.Argument(help="Path to watch (e.g., automations/, helpers/template/)"),
-    ] = None,
-) -> None:
-    """Watch local files and push changes automatically."""
-    with logfire.span("ha-sync watch", path=path):
-        config = get_config()
-        if not config.url or not config.token:
-            console.print("[red]Missing HA_URL or HA_TOKEN.[/red] Set them in .env file.")
-            raise typer.Exit(1)
-
-        console.print("[dim]Watching current directory for changes...[/dim]")
-        console.print("[dim]Press Ctrl+C to stop[/dim]")
-
-        try:
-            asyncio.run(_watch(config, path))
-        except KeyboardInterrupt:
-            console.print("\n[dim]Stopped watching[/dim]")
-
-
-async def _watch(config: SyncConfig, path: str | None) -> None:
-    """Watch for file changes and push."""
-    from watchfiles import awatch
-
-    watch_path = Path(".")
-
-    async for changes in awatch(watch_path):
-        console.print(f"\n[dim]Detected {len(changes)} change(s)[/dim]")
-
-        async with HAClient(config.url, config.token) as client:
-            syncers_with_filters = await get_syncers_for_path(client, config, path)
-
-            for syncer, _file_filter in syncers_with_filters:
-                # Check if any changed files are in this syncer's path
-                syncer_path = syncer.local_path
-                relevant = any(str(syncer_path) in str(changed_path) for _, changed_path in changes)
-                if relevant:
-                    console.print(f"[bold]Pushing {syncer.entity_type}s...[/bold]")
-                    await syncer.push()
 
 
 @app.command()
@@ -1085,6 +1359,143 @@ async def _state(config: SyncConfig, entity: str) -> None:
             console.print("\n[bold]Attributes:[/bold]")
             for key, value in sorted(attrs.items()):
                 console.print(f"  {key}: {value}")
+
+
+@app.command()
+def sync(
+    path: Annotated[
+        str | None,
+        typer.Argument(help="Path to sync (e.g., automations/, helpers/template/)"),
+    ] = None,
+    sync_deletions: Annotated[
+        bool,
+        typer.Option("--sync-deletions", help="Sync deletions in both directions"),
+    ] = False,
+    yes: Annotated[
+        bool,
+        typer.Option("--yes", "-y", help="Skip confirmation and autostash"),
+    ] = False,
+) -> None:
+    """Bidirectional sync: pull from HA, merge local changes, push back.
+
+    This is the safest way to sync when you have local changes:
+    1. Stashes local changes (if git repo)
+    2. Pulls latest from Home Assistant
+    3. Restores stashed changes (may create conflicts)
+    4. If no conflicts, pushes local changes to Home Assistant
+
+    If conflicts are detected after restoring the stash, the command stops
+    and asks you to resolve them manually before pushing.
+    """
+    with logfire.span("ha-sync sync", path=path, yes=yes):
+        config = get_config()
+        if not config.url or not config.token:
+            console.print("[red]Missing HA_URL or HA_TOKEN.[/red] Set them in .env file.")
+            raise typer.Exit(1)
+
+        # Check if we're in a git repo
+        in_git = is_git_repo()
+        if not in_git and not yes:
+            console.print(
+                "[yellow]Warning:[/yellow] Not in a git repo. "
+                "Local changes may be overwritten during pull."
+            )
+            if not _ask_confirmation("continue anyway"):
+                console.print("[dim]Aborted[/dim]")
+                raise typer.Exit(0)
+
+        # Step 1: Show remote changes (will be pulled first)
+        console.print("[bold]Remote changes (will be pulled):[/bold]\n")
+        pull_diff = asyncio.run(_get_pull_diff(config, path, sync_deletions))
+
+        if pull_diff:
+            _display_diff_items(pull_diff, direction="pull")
+        else:
+            console.print("[dim]No remote changes[/dim]\n")
+
+        # Step 2: Show local uncommitted changes (will be merged and pushed)
+        console.print("[bold]Your uncommitted changes (will be pushed after merge):[/bold]\n")
+        push_diff = asyncio.run(
+            _get_push_diff(config, path, all_items=False, sync_deletions=sync_deletions)
+        )
+
+        if push_diff:
+            _display_diff_items(push_diff, direction="push")
+        else:
+            console.print("[dim]No local changes[/dim]\n")
+
+        # If nothing to do, exit early
+        if not pull_diff and not push_diff:
+            console.print("[dim]Everything is in sync[/dim]")
+            return
+
+        # If only remote changes (no local changes), just pull without confirmation
+        if pull_diff and not push_diff:
+            console.print("[bold]Pulling from Home Assistant...[/bold]")
+            asyncio.run(_pull(config, path, sync_deletions, dry_run=False))
+            console.print("\n[green]Sync complete![/green]")
+            return
+
+        # Warn about potential conflicts
+        if pull_diff and push_diff:
+            pull_files = {item.file_path for item in pull_diff if item.file_path}
+            push_files = {item.file_path for item in push_diff if item.file_path}
+            overlap = pull_files & push_files
+            if overlap:
+                console.print(
+                    f"[yellow]Note:[/yellow] {len(overlap)} file(s) changed on both sides. "
+                    "May require conflict resolution.\n"
+                )
+
+        # Ask for confirmation when there are local changes to push
+        if not yes and not _ask_confirmation("proceed with sync"):
+            console.print("[dim]Aborted[/dim]")
+            raise typer.Exit(0)
+
+        # Step 3: Stash, pull, unstash
+        stashed = False
+        if in_git and not yes:
+            stash_result = git_stash(MANAGED_FOLDERS)
+            if stash_result.stashed:
+                console.print("[dim]Stashed local changes in managed folders[/dim]")
+                stashed = True
+
+        # Execute pull
+        if pull_diff:
+            console.print("\n[bold]Pulling from Home Assistant...[/bold]")
+            asyncio.run(_pull(config, path, sync_deletions, dry_run=False))
+
+        # Restore stash
+        if stashed:
+            pop_result = git_stash_pop()
+            if not pop_result.success:
+                if pop_result.has_conflicts:
+                    console.print("\n[yellow]Conflicts detected![/yellow]")
+                    console.print(
+                        "Resolve the conflicts in your files, then run "
+                        "[cyan]ha-sync push[/cyan] to push your changes."
+                    )
+                    raise typer.Exit(1)
+                else:
+                    console.print(f"[red]Error restoring stash:[/red] {pop_result.message}")
+                    raise typer.Exit(1)
+            console.print("[dim]Restored stashed changes[/dim]")
+
+        # Step 4: Push (re-calculate diff after pull + stash pop)
+        console.print("\n[bold]Checking for changes to push...[/bold]")
+        push_diff_after = asyncio.run(
+            _get_push_diff(config, path, all_items=False, sync_deletions=sync_deletions)
+        )
+
+        if push_diff_after:
+            console.print("\n[bold]Pushing to Home Assistant...[/bold]")
+            asyncio.run(
+                _push(config, path, all_items=False, sync_deletions=sync_deletions, dry_run=False)
+            )
+        else:
+            console.print("[dim]No changes to push after merge[/dim]")
+
+        console.print("\n[green]Sync complete![/green]")
 
 
 @app.command()

@@ -4,12 +4,12 @@ Sync Home Assistant UI configuration (dashboards, automations, helpers, etc.) to
 
 ## Features
 
-- **Bidirectional sync**: Pull from Home Assistant to local files, or push local changes back
+- **Bidirectional sync**: Pull from Home Assistant, push local changes back, or use `sync` for smart merging
+- **Git-aware**: Auto-stashes local changes before pull, restores after - safe to run anytime
 - **Multiple entity types**: Dashboards, automations, scripts, scenes, helpers, templates, groups
 - **Config entry helpers**: Utility meters, integrations, thresholds, generic thermostats, and more
 - **Diff view**: See exactly what changed between local and remote
 - **Validation**: Check YAML syntax and Jinja2 templates before pushing
-- **Watch mode**: Automatically push changes when files are modified
 
 ## Installation
 
@@ -53,6 +53,20 @@ View connection status and configuration:
 uv run ha-sync status
 ```
 
+### Sync (Recommended)
+
+Bidirectional sync that pulls remote changes, merges with local uncommitted changes, and pushes the result:
+
+```bash
+# Sync all entity types
+uv run ha-sync sync
+
+# Sync specific type
+uv run ha-sync sync automations
+```
+
+If there are only remote changes, pulls without confirmation. If there are local changes to push, asks for confirmation. In a git repo, auto-stashes local changes before pull and restores after.
+
 ### Pull
 
 Pull entities from Home Assistant to local YAML files:
@@ -70,6 +84,8 @@ uv run ha-sync pull helpers
 uv run ha-sync pull --sync-deletions
 ```
 
+In a git repo, auto-stashes local changes in managed folders before pull and restores after - safe to run anytime.
+
 ### Push
 
 Push local YAML files to Home Assistant:
@@ -84,12 +100,14 @@ uv run ha-sync push automations
 # Dry run (show what would change)
 uv run ha-sync push --dry-run
 
-# Force push all items (not just changed)
-uv run ha-sync push --force
+# Push all items (not just changed)
+uv run ha-sync push --all
 
 # Delete remote entities not in local files
 uv run ha-sync push --sync-deletions
 ```
+
+Always shows a preview and asks for confirmation before pushing.
 
 ### Diff
 
@@ -113,14 +131,6 @@ uv run ha-sync validate --check-templates
 
 # Check HA config validity
 uv run ha-sync validate --check-config
-```
-
-### Watch
-
-Watch for file changes and automatically push:
-
-```bash
-uv run ha-sync watch
 ```
 
 ## Entity Types
