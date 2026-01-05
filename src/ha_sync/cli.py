@@ -1,7 +1,7 @@
 """CLI interface for ha-sync."""
 
 import asyncio
-from enum import Enum
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Annotated
 
@@ -41,89 +41,170 @@ app = typer.Typer(
 console = Console()
 
 
-# Validation patterns
-ENTITY_ID_PATTERN = r"^[a-z0-9_]+$"
+# WebSocket-based helper types (under helpers/)
+WEBSOCKET_HELPER_TYPES = {
+    "input_boolean",
+    "input_number",
+    "input_select",
+    "input_text",
+    "input_datetime",
+    "input_button",
+    "timer",
+    "schedule",
+    "counter",
+}
 
 
-class EntityType(str, Enum):
-    ALL = "all"
-    DASHBOARDS = "dashboards"
-    AUTOMATIONS = "automations"
-    SCRIPTS = "scripts"
-    SCENES = "scenes"
-    HELPERS = "helpers"  # Traditional input_* helpers
-    TEMPLATES = "templates"
-    GROUPS = "groups"
-    CONFIG_HELPERS = "config_helpers"  # All config entry-based helpers
+@dataclass
+class SyncerSpec:
+    """Specification for a syncer with optional file filter."""
+
+    syncer_class: type[BaseSyncer]
+    file_filter: Path | None = None
+    # For ConfigEntrySyncer, we need to know the domain
+    domain: str | None = None
 
 
-def get_syncers(
-    client: HAClient,
+def resolve_path_to_syncers(
+    path: str | None,
     config: SyncConfig,
-    entity_type: EntityType,
     discovered_domains: set[str] | None = None,
-) -> list[BaseSyncer]:
-    """Get syncers for the specified entity type.
+) -> list[SyncerSpec]:
+    """Resolve a path argument to syncer specifications.
 
     Args:
-        client: HA client
-        config: Sync config
-        entity_type: Type of entities to sync
-        discovered_domains: Pre-discovered config entry helper domains.
-            If None and entity_type is ALL or CONFIG_HELPERS, will use
-            all known domains.
+        path: File path or directory path (e.g., "automations/", "helpers/template/sensor/")
+        config: Sync configuration
+        discovered_domains: Pre-discovered config entry helper domains
+
+    Returns:
+        List of SyncerSpec with syncer class and optional file filter
     """
-    # Core syncers (non-config-entry based)
-    core_syncers: list[BaseSyncer] = [
-        DashboardSyncer(client, config),
-        AutomationSyncer(client, config),
-        ScriptSyncer(client, config),
-        SceneSyncer(client, config),
-        HelperSyncer(client, config),
-        TemplateSyncer(client, config),
-        GroupSyncer(client, config),
-    ]
+    if path is None:
+        # No path = all syncers
+        specs: list[SyncerSpec] = [
+            SyncerSpec(DashboardSyncer),
+            SyncerSpec(AutomationSyncer),
+            SyncerSpec(ScriptSyncer),
+            SyncerSpec(SceneSyncer),
+            SyncerSpec(HelperSyncer),
+            SyncerSpec(TemplateSyncer),
+            SyncerSpec(GroupSyncer),
+        ]
+        # Add config entry syncers for discovered domains
+        domains = discovered_domains or CONFIG_ENTRY_HELPER_DOMAINS
+        for domain in sorted(domains):
+            specs.append(SyncerSpec(ConfigEntrySyncer, domain=domain))
+        return specs
 
-    type_map: dict[EntityType, type[BaseSyncer]] = {
-        EntityType.DASHBOARDS: DashboardSyncer,
-        EntityType.AUTOMATIONS: AutomationSyncer,
-        EntityType.SCRIPTS: ScriptSyncer,
-        EntityType.SCENES: SceneSyncer,
-        EntityType.HELPERS: HelperSyncer,
-        EntityType.TEMPLATES: TemplateSyncer,
-        EntityType.GROUPS: GroupSyncer,
-    }
+    # Normalize path (remove trailing slashes, handle relative paths)
+    path_obj = Path(path.rstrip("/"))
+    parts = path_obj.parts
 
-    # Handle specific entity types
-    if entity_type in type_map:
-        return [type_map[entity_type](client, config)]
+    if not parts:
+        # Empty path = all syncers
+        return resolve_path_to_syncers(None, config, discovered_domains)
 
-    # Get config entry helper syncers
-    domains = discovered_domains or CONFIG_ENTRY_HELPER_DOMAINS
-    config_entry_syncers: list[BaseSyncer] = [
-        ConfigEntrySyncer(client, config, domain) for domain in sorted(domains)
-    ]
+    top_level = parts[0]
 
-    if entity_type == EntityType.CONFIG_HELPERS:
-        return config_entry_syncers
+    # Map top-level directories to syncers
+    if top_level == "dashboards":
+        file_filter = path_obj if len(parts) > 1 else None
+        return [SyncerSpec(DashboardSyncer, file_filter=file_filter)]
 
-    # ALL: return core syncers + config entry syncers
-    return core_syncers + config_entry_syncers
+    elif top_level == "automations":
+        file_filter = path_obj if len(parts) > 1 else None
+        return [SyncerSpec(AutomationSyncer, file_filter=file_filter)]
+
+    elif top_level == "scripts":
+        file_filter = path_obj if len(parts) > 1 else None
+        return [SyncerSpec(ScriptSyncer, file_filter=file_filter)]
+
+    elif top_level == "scenes":
+        file_filter = path_obj if len(parts) > 1 else None
+        return [SyncerSpec(SceneSyncer, file_filter=file_filter)]
+
+    elif top_level == "helpers":
+        if len(parts) == 1:
+            # helpers/ = all helper syncers
+            specs = [
+                SyncerSpec(HelperSyncer),
+                SyncerSpec(TemplateSyncer),
+                SyncerSpec(GroupSyncer),
+            ]
+            domains = discovered_domains or CONFIG_ENTRY_HELPER_DOMAINS
+            for domain in sorted(domains):
+                specs.append(SyncerSpec(ConfigEntrySyncer, domain=domain))
+            return specs
+
+        helper_type = parts[1]
+
+        # WebSocket-based helpers (input_*, timer, counter, schedule)
+        if helper_type in WEBSOCKET_HELPER_TYPES:
+            file_filter = path_obj if len(parts) > 2 else None
+            return [SyncerSpec(HelperSyncer, file_filter=file_filter)]
+
+        # Template helpers
+        elif helper_type == "template":
+            file_filter = path_obj if len(parts) > 2 else None
+            return [SyncerSpec(TemplateSyncer, file_filter=file_filter)]
+
+        # Group helpers
+        elif helper_type == "group":
+            file_filter = path_obj if len(parts) > 2 else None
+            return [SyncerSpec(GroupSyncer, file_filter=file_filter)]
+
+        # Config entry helpers (integration, utility_meter, threshold, tod, etc.)
+        else:
+            file_filter = path_obj if len(parts) > 2 else None
+            return [SyncerSpec(ConfigEntrySyncer, file_filter=file_filter, domain=helper_type)]
+
+    else:
+        # Unknown path - try to be helpful
+        console.print(f"[red]Unknown path:[/red] {path}")
+        console.print(
+            "[dim]Valid paths: dashboards/, automations/, scripts/, scenes/, helpers/[/dim]"
+        )
+        raise typer.Exit(1)
 
 
-async def get_syncers_with_discovery(
-    client: HAClient, config: SyncConfig, entity_type: EntityType
-) -> list[BaseSyncer]:
-    """Get syncers, auto-discovering config entry helper domains.
+def create_syncers_from_specs(
+    specs: list[SyncerSpec],
+    client: HAClient,
+    config: SyncConfig,
+) -> list[tuple[BaseSyncer, Path | None]]:
+    """Create syncer instances from specs.
 
-    This discovers which helper domains actually have entries in the HA instance,
-    avoiding empty syncs for unused helper types.
+    Returns:
+        List of (syncer, file_filter) tuples
     """
-    if entity_type in (EntityType.ALL, EntityType.CONFIG_HELPERS):
-        # Discover which helper domains have entries
+    result: list[tuple[BaseSyncer, Path | None]] = []
+    for spec in specs:
+        if spec.syncer_class == ConfigEntrySyncer:
+            syncer = ConfigEntrySyncer(client, config, spec.domain or "")
+        else:
+            syncer = spec.syncer_class(client, config)
+        result.append((syncer, spec.file_filter))
+    return result
+
+
+async def get_syncers_for_path(
+    client: HAClient,
+    config: SyncConfig,
+    path: str | None,
+) -> list[tuple[BaseSyncer, Path | None]]:
+    """Get syncers for a path, auto-discovering config entry helper domains.
+
+    Returns:
+        List of (syncer, file_filter) tuples
+    """
+    # Discover helper domains if needed
+    discovered: set[str] | None = None
+    if path is None or path.rstrip("/") == "helpers":
         discovered = await discover_helper_domains(client)
-        return get_syncers(client, config, entity_type, discovered)
-    return get_syncers(client, config, entity_type)
+
+    specs = resolve_path_to_syncers(path, config, discovered)
+    return create_syncers_from_specs(specs, client, config)
 
 
 @app.command()
@@ -191,10 +272,10 @@ async def _test_connection(config: SyncConfig) -> None:
 
 @app.command()
 def validate(
-    entity_type: Annotated[
-        EntityType,
-        typer.Argument(help="Type of entities to validate"),
-    ] = EntityType.ALL,
+    path: Annotated[
+        str | None,
+        typer.Argument(help="Path to validate (e.g., automations/, helpers/template/)"),
+    ] = None,
     check_templates: Annotated[
         bool,
         typer.Option("--check-templates", "-t", help="Validate Jinja2 templates against HA"),
@@ -213,12 +294,12 @@ def validate(
     ] = True,
 ) -> None:
     """Validate local YAML files for errors."""
-    with logfire.span("ha-sync validate {entity_type}", entity_type=entity_type.value):
-        _validate_impl(entity_type, check_templates, check_config, diff_only)
+    with logfire.span("ha-sync validate", path=path):
+        _validate_impl(path, check_templates, check_config, diff_only)
 
 
 def _validate_impl(
-    entity_type: EntityType,
+    path: str | None,
     check_templates: bool,
     check_config: bool,
     diff_only: bool,
@@ -234,20 +315,20 @@ def _validate_impl(
     templates_to_check: list[tuple[str, str, str]] = []  # (file, path, template)
     files_checked = 0
 
+    # Resolve path to determine what to validate
+    specs = resolve_path_to_syncers(path, config, None)
+    syncer_classes = {spec.syncer_class for spec in specs}
+    file_filter = specs[0].file_filter if len(specs) == 1 and specs[0].file_filter else None
+
     # Get changed files if diff_only mode
     changed_files: set[str] = set()
     if check_templates and diff_only and config.url and config.token:
         console.print("[dim]Getting diff to find changed files...[/dim]")
-        diff_items = asyncio.run(_get_diff_items(config, entity_type))
+        diff_items = asyncio.run(_get_diff_items(config, path))
         for item in diff_items:
             # Collect file paths from changed items
             if item.status in ("added", "modified", "renamed") and item.file_path:
                 changed_files.add(item.file_path)
-
-    def validate_entity_id(entity_id: str, rel_path: str) -> None:
-        """Validate entity ID format."""
-        if not re.match(ENTITY_ID_PATTERN, entity_id):
-            errors.append((rel_path, f"Invalid entity ID format: '{entity_id}'"))
 
     def validate_yaml_file(file_path: Path, required_fields: list[str] | None = None) -> None:
         """Validate a single YAML file."""
@@ -270,10 +351,6 @@ def _validate_impl(
                 for field in required_fields:
                     if field not in data:
                         errors.append((rel_path, f"Missing required field: '{field}'"))
-
-            # Validate entity ID if present
-            if "id" in data:
-                validate_entity_id(data["id"], rel_path)
 
             # Check for Jinja2 templates and validate syntax
             collect_templates(data, rel_path)
@@ -306,39 +383,52 @@ def _validate_impl(
                                 (rel_path, f"Unbalanced {{{{ }}}} in {current_path}[{i}]")
                             )
                         elif item.count("{%") != item.count("%}"):
-                            errors.append(
-                                (rel_path, f"Unbalanced {{% %}} in {current_path}[{i}]")
-                            )
+                            errors.append((rel_path, f"Unbalanced {{% %}} in {current_path}[{i}]"))
                         else:
                             location = f"{current_path}[{i}]"
                             templates_to_check.append((rel_path, location, item))
 
     console.print("[bold]Validating local files...[/bold]\n")
 
+    def should_validate_file(file_path: Path) -> bool:
+        """Check if file matches the filter."""
+        if file_filter is None:
+            return True
+        # Check if file path matches the filter (is under the filter path or matches it)
+        try:
+            file_path.relative_to(file_filter)
+            return True
+        except ValueError:
+            return str(file_path) == str(file_filter) or str(file_path).endswith(str(file_filter))
+
     # Validate automations
-    if entity_type in (EntityType.ALL, EntityType.AUTOMATIONS):
+    if AutomationSyncer in syncer_classes:
         for yaml_file in config.automations_path.glob("*.yaml"):
-            validate_yaml_file(yaml_file, required_fields=["id", "alias"])
+            if should_validate_file(yaml_file):
+                validate_yaml_file(yaml_file, required_fields=["id", "alias"])
 
     # Validate scripts
-    if entity_type in (EntityType.ALL, EntityType.SCRIPTS):
+    if ScriptSyncer in syncer_classes:
         for yaml_file in config.scripts_path.glob("*.yaml"):
-            validate_yaml_file(yaml_file)
+            if should_validate_file(yaml_file):
+                validate_yaml_file(yaml_file)
 
     # Validate scenes
-    if entity_type in (EntityType.ALL, EntityType.SCENES):
+    if SceneSyncer in syncer_classes:
         for yaml_file in config.scenes_path.glob("*.yaml"):
-            validate_yaml_file(yaml_file, required_fields=["id"])
+            if should_validate_file(yaml_file):
+                validate_yaml_file(yaml_file, required_fields=["id"])
 
     # Validate dashboards
-    if entity_type in (EntityType.ALL, EntityType.DASHBOARDS):
+    if DashboardSyncer in syncer_classes:
         for dashboard_dir in config.dashboards_path.iterdir():
             if dashboard_dir.is_dir():
                 for yaml_file in dashboard_dir.glob("*.yaml"):
-                    validate_yaml_file(yaml_file)
+                    if should_validate_file(yaml_file):
+                        validate_yaml_file(yaml_file)
 
     # Validate helpers (WebSocket-based)
-    if entity_type in (EntityType.ALL, EntityType.HELPERS):
+    if HelperSyncer in syncer_classes:
         helper_types = [
             "input_boolean",
             "input_number",
@@ -354,27 +444,30 @@ def _validate_impl(
             helper_path = config.helpers_path / helper_type
             if helper_path.exists():
                 for yaml_file in helper_path.glob("*.yaml"):
-                    validate_yaml_file(yaml_file, required_fields=["id", "name"])
+                    if should_validate_file(yaml_file):
+                        validate_yaml_file(yaml_file, required_fields=["id", "name"])
 
     # Validate template helpers (now under helpers/template/)
-    if entity_type in (EntityType.ALL, EntityType.TEMPLATES):
+    if TemplateSyncer in syncer_classes:
         template_path = config.helpers_path / "template"
         if template_path.exists():
             for subtype_dir in template_path.iterdir():
                 if subtype_dir.is_dir():
                     for yaml_file in subtype_dir.glob("*.yaml"):
-                        # entry_id is optional for new files (generated by HA on push)
-                        validate_yaml_file(yaml_file, required_fields=["name"])
+                        if should_validate_file(yaml_file):
+                            # entry_id is optional for new files (generated by HA on push)
+                            validate_yaml_file(yaml_file, required_fields=["name"])
 
     # Validate group helpers (now under helpers/group/)
-    if entity_type in (EntityType.ALL, EntityType.GROUPS):
+    if GroupSyncer in syncer_classes:
         group_path = config.helpers_path / "group"
         if group_path.exists():
             for subtype_dir in group_path.iterdir():
                 if subtype_dir.is_dir():
                     for yaml_file in subtype_dir.glob("*.yaml"):
-                        # entry_id is optional for new files (generated by HA on push)
-                        validate_yaml_file(yaml_file, required_fields=["name"])
+                        if should_validate_file(yaml_file):
+                            # entry_id is optional for new files (generated by HA on push)
+                            validate_yaml_file(yaml_file, required_fields=["name"])
 
     # Report local validation results
     if errors:
@@ -478,22 +571,36 @@ async def _check_ha_config(config: SyncConfig) -> dict:
         return await client.check_config()
 
 
-async def _get_diff_items(config: SyncConfig, entity_type: EntityType) -> list[DiffItem]:
-    """Get diff items for the specified entity type."""
+async def _get_diff_items(config: SyncConfig, path: str | None) -> list[DiffItem]:
+    """Get diff items for the specified path."""
     items: list[DiffItem] = []
     async with HAClient(config.url, config.token) as client:
-        syncers = await get_syncers_with_discovery(client, config, entity_type)
-        for syncer in syncers:
-            items.extend(await syncer.diff())
+        syncers_with_filters = await get_syncers_for_path(client, config, path)
+        for syncer, file_filter in syncers_with_filters:
+            syncer_items = await syncer.diff()
+            # Filter items if file_filter is set
+            if file_filter:
+                syncer_items = [
+                    item
+                    for item in syncer_items
+                    if item.file_path and _matches_filter(item.file_path, file_filter)
+                ]
+            items.extend(syncer_items)
     return items
+
+
+def _matches_filter(file_path: str, file_filter: Path) -> bool:
+    """Check if a file path matches the filter."""
+    filter_str = str(file_filter)
+    return file_path.startswith(filter_str) or file_path == filter_str
 
 
 @app.command()
 def pull(
-    entity_type: Annotated[
-        EntityType,
-        typer.Argument(help="Type of entities to pull"),
-    ] = EntityType.ALL,
+    path: Annotated[
+        str | None,
+        typer.Argument(help="Path to pull (e.g., automations/, helpers/template/)"),
+    ] = None,
     sync_deletions: Annotated[
         bool,
         typer.Option("--sync-deletions", help="Delete local files not in Home Assistant"),
@@ -504,7 +611,7 @@ def pull(
     ] = False,
 ) -> None:
     """Pull entities from Home Assistant to local files."""
-    with logfire.span("ha-sync pull {entity_type}", entity_type=entity_type.value, dry_run=dry_run):
+    with logfire.span("ha-sync pull", path=path, dry_run=dry_run):
         config = get_config()
         if not config.url or not config.token:
             console.print("[red]Missing HA_URL or HA_TOKEN.[/red] Set them in .env file.")
@@ -513,17 +620,17 @@ def pull(
         if dry_run:
             console.print("[cyan]Dry run mode - no changes will be made[/cyan]")
 
-        asyncio.run(_pull(config, entity_type, sync_deletions, dry_run))
+        asyncio.run(_pull(config, path, sync_deletions, dry_run))
 
 
 async def _pull(
-    config: SyncConfig, entity_type: EntityType, sync_deletions: bool, dry_run: bool = False
+    config: SyncConfig, path: str | None, sync_deletions: bool, dry_run: bool = False
 ) -> None:
     """Pull entities from Home Assistant."""
     async with HAClient(config.url, config.token) as client:
-        syncers = await get_syncers_with_discovery(client, config, entity_type)
+        syncers_with_filters = await get_syncers_for_path(client, config, path)
 
-        for syncer in syncers:
+        for syncer, file_filter in syncers_with_filters:
             console.print(f"\n[bold]Pulling {syncer.entity_type}s...[/bold]")
             result = await syncer.pull(sync_deletions=sync_deletions, dry_run=dry_run)
 
@@ -541,10 +648,10 @@ async def _pull(
 
 @app.command()
 def push(
-    entity_type: Annotated[
-        EntityType,
-        typer.Argument(help="Type of entities to push"),
-    ] = EntityType.ALL,
+    path: Annotated[
+        str | None,
+        typer.Argument(help="Path to push (e.g., automations/, helpers/template/)"),
+    ] = None,
     force: Annotated[
         bool,
         typer.Option("--force", "-f", help="Push all local items, not just changed ones"),
@@ -559,9 +666,7 @@ def push(
     ] = False,
 ) -> None:
     """Push local files to Home Assistant."""
-    with logfire.span(
-        "ha-sync push {entity_type}", entity_type=entity_type.value, force=force, dry_run=dry_run
-    ):
+    with logfire.span("ha-sync push", path=path, force=force, dry_run=dry_run):
         config = get_config()
         if not config.url or not config.token:
             console.print("[red]Missing HA_URL or HA_TOKEN.[/red] Set them in .env file.")
@@ -570,21 +675,21 @@ def push(
         if dry_run:
             console.print("[cyan]Dry run mode - no changes will be made[/cyan]")
 
-        asyncio.run(_push(config, entity_type, force, sync_deletions, dry_run))
+        asyncio.run(_push(config, path, force, sync_deletions, dry_run))
 
 
 async def _push(
     config: SyncConfig,
-    entity_type: EntityType,
+    path: str | None,
     force: bool,
     sync_deletions: bool,
     dry_run: bool,
 ) -> None:
     """Push entities to Home Assistant."""
     async with HAClient(config.url, config.token) as client:
-        syncers = await get_syncers_with_discovery(client, config, entity_type)
+        syncers_with_filters = await get_syncers_for_path(client, config, path)
 
-        for syncer in syncers:
+        for syncer, file_filter in syncers_with_filters:
             console.print(f"\n[bold]Pushing {syncer.entity_type}s...[/bold]")
             result = await syncer.push(force=force, sync_deletions=sync_deletions, dry_run=dry_run)
 
@@ -604,33 +709,40 @@ async def _push(
 
 @app.command()
 def diff(
-    entity_type: Annotated[
-        EntityType,
-        typer.Argument(help="Type of entities to diff"),
-    ] = EntityType.ALL,
+    path: Annotated[
+        str | None,
+        typer.Argument(help="Path to diff (e.g., automations/, helpers/template/)"),
+    ] = None,
 ) -> None:
     """Show differences between local and remote."""
-    with logfire.span("ha-sync diff {entity_type}", entity_type=entity_type.value):
+    with logfire.span("ha-sync diff", path=path):
         config = get_config()
         if not config.url or not config.token:
             console.print("[red]Missing HA_URL or HA_TOKEN.[/red] Set them in .env file.")
             raise typer.Exit(1)
 
-        asyncio.run(_diff(config, entity_type))
+        asyncio.run(_diff(config, path))
 
 
-async def _diff(config: SyncConfig, entity_type: EntityType) -> None:
+async def _diff(config: SyncConfig, path: str | None) -> None:
     """Show differences between local and remote."""
     import difflib
 
     from ha_sync.utils import dump_yaml
 
     async with HAClient(config.url, config.token) as client:
-        syncers = await get_syncers_with_discovery(client, config, entity_type)
+        syncers_with_filters = await get_syncers_for_path(client, config, path)
         all_items: list[tuple[str, DiffItem]] = []
 
-        for syncer in syncers:
+        for syncer, file_filter in syncers_with_filters:
             items = await syncer.diff()
+            # Filter items if file_filter is set
+            if file_filter:
+                items = [
+                    item
+                    for item in items
+                    if item.file_path and _matches_filter(item.file_path, file_filter)
+                ]
             for item in items:
                 all_items.append((syncer.entity_type, item))
 
@@ -698,13 +810,13 @@ async def _diff(config: SyncConfig, entity_type: EntityType) -> None:
 
 @app.command()
 def watch(
-    entity_type: Annotated[
-        EntityType,
-        typer.Argument(help="Type of entities to watch"),
-    ] = EntityType.ALL,
+    path: Annotated[
+        str | None,
+        typer.Argument(help="Path to watch (e.g., automations/, helpers/template/)"),
+    ] = None,
 ) -> None:
     """Watch local files and push changes automatically."""
-    with logfire.span("ha-sync watch {entity_type}", entity_type=entity_type.value):
+    with logfire.span("ha-sync watch", path=path):
         config = get_config()
         if not config.url or not config.token:
             console.print("[red]Missing HA_URL or HA_TOKEN.[/red] Set them in .env file.")
@@ -714,12 +826,12 @@ def watch(
         console.print("[dim]Press Ctrl+C to stop[/dim]")
 
         try:
-            asyncio.run(_watch(config, entity_type))
+            asyncio.run(_watch(config, path))
         except KeyboardInterrupt:
             console.print("\n[dim]Stopped watching[/dim]")
 
 
-async def _watch(config: SyncConfig, entity_type: EntityType) -> None:
+async def _watch(config: SyncConfig, path: str | None) -> None:
     """Watch for file changes and push."""
     from watchfiles import awatch
 
@@ -729,15 +841,252 @@ async def _watch(config: SyncConfig, entity_type: EntityType) -> None:
         console.print(f"\n[dim]Detected {len(changes)} change(s)[/dim]")
 
         async with HAClient(config.url, config.token) as client:
-            syncers = await get_syncers_with_discovery(client, config, entity_type)
+            syncers_with_filters = await get_syncers_for_path(client, config, path)
 
-            for syncer in syncers:
+            for syncer, file_filter in syncers_with_filters:
                 # Check if any changed files are in this syncer's path
                 syncer_path = syncer.local_path
-                relevant = any(str(syncer_path) in str(path) for _, path in changes)
+                relevant = any(str(syncer_path) in str(changed_path) for _, changed_path in changes)
                 if relevant:
                     console.print(f"[bold]Pushing {syncer.entity_type}s...[/bold]")
                     await syncer.push()
+
+
+@app.command()
+def template(
+    template_str: Annotated[
+        str,
+        typer.Argument(help="Jinja2 template string to render"),
+    ],
+) -> None:
+    """Test a Jinja2 template against Home Assistant."""
+    with logfire.span("ha-sync template"):
+        config = get_config()
+        if not config.url or not config.token:
+            console.print("[red]Missing HA_URL or HA_TOKEN.[/red] Set them in .env file.")
+            raise typer.Exit(1)
+
+        asyncio.run(_template(config, template_str))
+
+
+async def _template(config: SyncConfig, template_str: str) -> None:
+    """Render a template against Home Assistant."""
+    async with HAClient(config.url, config.token) as client:
+        is_valid, result = await client.validate_template(template_str)
+        if is_valid:
+            console.print(result)
+        else:
+            console.print(f"[red]Template error:[/red] {result}")
+            raise typer.Exit(1)
+
+
+@app.command()
+def search(
+    query: Annotated[
+        str,
+        typer.Argument(help="Search query (matches entity_id and friendly_name)"),
+    ],
+    domain: Annotated[
+        str | None,
+        typer.Option("--domain", "-d", help="Filter by domain (e.g., light, switch)"),
+    ] = None,
+    state: Annotated[
+        str | None,
+        typer.Option("--state", "-s", help="Filter by current state (e.g., on, off)"),
+    ] = None,
+) -> None:
+    """Search for entities in Home Assistant."""
+    with logfire.span("ha-sync search", query=query):
+        config = get_config()
+        if not config.url or not config.token:
+            console.print("[red]Missing HA_URL or HA_TOKEN.[/red] Set them in .env file.")
+            raise typer.Exit(1)
+
+        asyncio.run(_search(config, query, domain, state))
+
+
+async def _search(
+    config: SyncConfig, query: str, domain: str | None, state_filter: str | None
+) -> None:
+    """Search for entities in Home Assistant."""
+    import fnmatch
+    import re
+
+    async with HAClient(config.url, config.token) as client:
+        all_states = await client.get_all_states()
+
+        # Filter by domain
+        if domain:
+            all_states = [s for s in all_states if s["entity_id"].startswith(f"{domain}.")]
+
+        # Filter by state
+        if state_filter:
+            all_states = [s for s in all_states if s.get("state") == state_filter]
+
+        # Filter by query (matches entity_id or friendly_name)
+        query_lower = query.lower()
+        # Check if query is a glob pattern
+        is_glob = "*" in query or "?" in query
+
+        matches = []
+        for entity in all_states:
+            entity_id = entity["entity_id"]
+            friendly_name = entity.get("attributes", {}).get("friendly_name", "")
+
+            if is_glob:
+                # Glob pattern matching
+                if fnmatch.fnmatch(entity_id.lower(), query_lower) or fnmatch.fnmatch(
+                    friendly_name.lower(), query_lower
+                ):
+                    matches.append(entity)
+            else:
+                # Substring matching
+                if query_lower in entity_id.lower() or query_lower in friendly_name.lower():
+                    matches.append(entity)
+
+        if not matches:
+            console.print("[dim]No entities found[/dim]")
+            return
+
+        # Display results
+        table = Table(title=f"Found {len(matches)} entities")
+        table.add_column("Entity ID", style="cyan")
+        table.add_column("State")
+        table.add_column("Name", style="dim")
+
+        for entity in sorted(matches, key=lambda e: e["entity_id"]):
+            entity_id = entity["entity_id"]
+            state_val = entity.get("state", "")
+            friendly_name = entity.get("attributes", {}).get("friendly_name", "")
+
+            # Color state based on value
+            if state_val in ("on", "home", "playing", "open"):
+                state_display = f"[green]{state_val}[/green]"
+            elif state_val in ("off", "not_home", "idle", "closed", "paused"):
+                state_display = f"[dim]{state_val}[/dim]"
+            elif state_val == "unavailable":
+                state_display = f"[red]{state_val}[/red]"
+            else:
+                state_display = state_val
+
+            table.add_row(entity_id, state_display, friendly_name)
+
+        console.print(table)
+
+
+@app.command()
+def state(
+    entity: Annotated[
+        str,
+        typer.Argument(help="Entity ID (e.g., light.living_room) or file path"),
+    ],
+) -> None:
+    """Get the current state of an entity."""
+    with logfire.span("ha-sync state", entity=entity):
+        config = get_config()
+        if not config.url or not config.token:
+            console.print("[red]Missing HA_URL or HA_TOKEN.[/red] Set them in .env file.")
+            raise typer.Exit(1)
+
+        asyncio.run(_state(config, entity))
+
+
+async def _state(config: SyncConfig, entity: str) -> None:
+    """Get entity state."""
+    from ha_sync.utils import load_yaml
+
+    # Detect if input is a file path or entity ID
+    is_file_path = "/" in entity or entity.endswith(".yaml")
+
+    entity_id: str | None = None
+
+    if is_file_path:
+        # Parse file to extract entity ID
+        file_path = Path(entity)
+        if not file_path.exists():
+            console.print(f"[red]File not found:[/red] {entity}")
+            raise typer.Exit(1)
+
+        data = load_yaml(file_path)
+        if not data:
+            console.print(f"[red]Could not parse file:[/red] {entity}")
+            raise typer.Exit(1)
+
+        # Determine entity ID based on file location and content
+        parts = file_path.parts
+
+        if "automations" in parts:
+            # Automations use "id" field with automation. domain
+            auto_id = data.get("id")
+            if auto_id:
+                entity_id = f"automation.{auto_id}"
+        elif "scripts" in parts:
+            # Scripts use filename as ID
+            entity_id = f"script.{file_path.stem}"
+        elif "scenes" in parts:
+            # Scenes use "id" field
+            scene_id = data.get("id")
+            if scene_id:
+                entity_id = f"scene.{scene_id}"
+        elif "helpers" in parts:
+            # Helpers: look for entry_id or id field
+            helper_id = data.get("id") or data.get("entry_id")
+            if helper_id:
+                # Determine domain from path
+                if "input_boolean" in parts:
+                    entity_id = f"input_boolean.{helper_id}"
+                elif "input_number" in parts:
+                    entity_id = f"input_number.{helper_id}"
+                elif "input_select" in parts:
+                    entity_id = f"input_select.{helper_id}"
+                elif "input_text" in parts:
+                    entity_id = f"input_text.{helper_id}"
+                elif "input_datetime" in parts:
+                    entity_id = f"input_datetime.{helper_id}"
+                elif "input_button" in parts:
+                    entity_id = f"input_button.{helper_id}"
+                elif "timer" in parts:
+                    entity_id = f"timer.{helper_id}"
+                elif "counter" in parts:
+                    entity_id = f"counter.{helper_id}"
+                elif "schedule" in parts:
+                    entity_id = f"schedule.{helper_id}"
+                # For config entry helpers (template, group, etc.),
+                # we need to look up entities by config entry ID
+                elif "template" in parts or "group" in parts:
+                    entry_id = data.get("entry_id")
+                    if entry_id:
+                        # Look up entity from registry
+                        async with HAClient(config.url, config.token) as client:
+                            entities = await client.get_entities_for_config_entry(entry_id)
+                            if entities:
+                                entity_id = entities[0].get("entity_id")
+
+        if not entity_id:
+            console.print(f"[red]Could not determine entity ID from file:[/red] {entity}")
+            raise typer.Exit(1)
+
+        console.print(f"[dim]File maps to entity:[/dim] {entity_id}")
+    else:
+        entity_id = entity
+
+    async with HAClient(config.url, config.token) as client:
+        state_data = await client.get_entity_state(entity_id)
+
+        if not state_data:
+            console.print(f"[red]Entity not found:[/red] {entity_id}")
+            raise typer.Exit(1)
+
+        # Display state info
+        console.print(f"[bold]Entity:[/bold] {state_data['entity_id']}")
+        console.print(f"[bold]State:[/bold] {state_data.get('state', 'unknown')}")
+        console.print(f"[bold]Last Changed:[/bold] {state_data.get('last_changed', 'unknown')}")
+
+        attrs = state_data.get("attributes", {})
+        if attrs:
+            console.print("\n[bold]Attributes:[/bold]")
+            for key, value in sorted(attrs.items()):
+                console.print(f"  {key}: {value}")
 
 
 @app.command()

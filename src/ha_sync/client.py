@@ -879,9 +879,7 @@ class HAClient:
     async def get_entity_registry_entry(self, entity_id: str) -> dict[str, Any] | None:
         """Get a single entity registry entry by entity_id."""
         try:
-            result = await self.send_command(
-                "config/entity_registry/get", entity_id=entity_id
-            )
+            result = await self.send_command("config/entity_registry/get", entity_id=entity_id)
             return result if isinstance(result, dict) else None
         except Exception:
             return None
@@ -929,9 +927,7 @@ class HAClient:
         result = await self.send_command("config/entity_registry/update", **kwargs)
         return result if isinstance(result, dict) else {}
 
-    async def get_entities_for_config_entry(
-        self, entry_id: str
-    ) -> list[dict[str, Any]]:
+    async def get_entities_for_config_entry(self, entry_id: str) -> list[dict[str, Any]]:
         """Get all entity registry entries for a config entry.
 
         Args:
@@ -944,6 +940,24 @@ class HAClient:
         return [e for e in all_entities if e.get("config_entry_id") == entry_id]
 
     # --- Utility Methods ---
+
+    # --- State Methods ---
+
+    @logfire.instrument("Get all states")
+    async def get_all_states(self) -> list[dict[str, Any]]:
+        """Get all entity states."""
+        response = await self.http.get("/api/states")
+        response.raise_for_status()
+        return response.json()
+
+    @logfire.instrument("Get entity state: {entity_id}")
+    async def get_entity_state(self, entity_id: str) -> dict[str, Any] | None:
+        """Get state for a specific entity."""
+        response = await self.http.get(f"/api/states/{entity_id}")
+        if response.status_code == 404:
+            return None
+        response.raise_for_status()
+        return response.json()
 
     @logfire.instrument("Check HA config")
     async def check_config(self) -> dict[str, Any]:

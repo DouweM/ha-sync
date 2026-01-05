@@ -44,7 +44,7 @@ class BaseEntityModel(BaseModel):
 class Automation(BaseEntityModel):
     """Home Assistant automation."""
 
-    id: str
+    id: str = Field(pattern=r"^[a-z0-9_]+$")
     alias: str = ""
     description: str = ""
     trigger: list[dict[str, Any]] = Field(default_factory=list)
@@ -61,7 +61,7 @@ class Automation(BaseEntityModel):
 class Script(BaseEntityModel):
     """Home Assistant script."""
 
-    id: str
+    id: str = Field(pattern=r"^[a-z0-9_]+$")
     alias: str | None = None
     description: str | None = None
     icon: str | None = None
@@ -77,7 +77,7 @@ class Script(BaseEntityModel):
 class Scene(BaseEntityModel):
     """Home Assistant scene."""
 
-    id: str
+    id: str = Field(pattern=r"^[a-z0-9_]+$")
     name: str
     icon: str | None = None
     entities: dict[str, Any] = Field(default_factory=dict)
@@ -91,7 +91,7 @@ class Scene(BaseEntityModel):
 class InputBoolean(BaseEntityModel):
     """Input boolean helper."""
 
-    id: str
+    id: str = Field(pattern=r"^[a-z0-9_]+$")
     name: str
     icon: str | None = None
     initial: bool | None = None
@@ -100,7 +100,7 @@ class InputBoolean(BaseEntityModel):
 class InputNumber(BaseEntityModel):
     """Input number helper."""
 
-    id: str
+    id: str = Field(pattern=r"^[a-z0-9_]+$")
     name: str
     icon: str | None = None
     min: float = 0
@@ -114,7 +114,7 @@ class InputNumber(BaseEntityModel):
 class InputSelect(BaseEntityModel):
     """Input select helper."""
 
-    id: str
+    id: str = Field(pattern=r"^[a-z0-9_]+$")
     name: str
     icon: str | None = None
     options: list[str] = Field(default_factory=list)
@@ -124,7 +124,7 @@ class InputSelect(BaseEntityModel):
 class InputText(BaseEntityModel):
     """Input text helper."""
 
-    id: str
+    id: str = Field(pattern=r"^[a-z0-9_]+$")
     name: str
     icon: str | None = None
     min: int = 0
@@ -137,7 +137,7 @@ class InputText(BaseEntityModel):
 class InputDatetime(BaseEntityModel):
     """Input datetime helper."""
 
-    id: str
+    id: str = Field(pattern=r"^[a-z0-9_]+$")
     name: str
     icon: str | None = None
     has_date: bool = True
@@ -148,7 +148,7 @@ class InputDatetime(BaseEntityModel):
 class InputButton(BaseEntityModel):
     """Input button helper."""
 
-    id: str
+    id: str = Field(pattern=r"^[a-z0-9_]+$")
     name: str
     icon: str | None = None
 
@@ -156,7 +156,7 @@ class InputButton(BaseEntityModel):
 class Timer(BaseEntityModel):
     """Timer helper."""
 
-    id: str
+    id: str = Field(pattern=r"^[a-z0-9_]+$")
     name: str
     icon: str | None = None
     duration: str | None = None  # HH:MM:SS format
@@ -166,7 +166,7 @@ class Timer(BaseEntityModel):
 class Schedule(BaseEntityModel):
     """Schedule helper."""
 
-    id: str
+    id: str = Field(pattern=r"^[a-z0-9_]+$")
     name: str
     icon: str | None = None
     # Schedule stores time blocks per day - structure varies
@@ -175,7 +175,7 @@ class Schedule(BaseEntityModel):
 class Counter(BaseEntityModel):
     """Counter helper."""
 
-    id: str
+    id: str = Field(pattern=r"^[a-z0-9_]+$")
     name: str
     icon: str | None = None
     initial: int | None = None
@@ -208,7 +208,7 @@ class TemplateSensor(BaseEntityModel):
     """Template sensor helper."""
 
     entry_id: str
-    id: str | None = None  # Entity ID (e.g., sensor.my_template) - optional, for renaming
+    id: str | None = Field(default=None, pattern=r"^[a-z0-9_]+\.[a-z0-9_]+$")  # Entity ID (e.g., sensor.my_template) - optional, for renaming
     name: str
     step_id: Literal["sensor"] = "sensor"
     state: str  # Template string
@@ -223,7 +223,7 @@ class TemplateBinarySensor(BaseEntityModel):
     """Template binary sensor helper."""
 
     entry_id: str
-    id: str | None = None  # Entity ID (e.g., binary_sensor.my_template) - optional, for renaming
+    id: str | None = Field(default=None, pattern=r"^[a-z0-9_]+\.[a-z0-9_]+$")  # Entity ID (e.g., binary_sensor.my_template) - optional, for renaming
     name: str
     step_id: Literal["binary_sensor"] = "binary_sensor"
     state: str  # Template string
@@ -236,7 +236,7 @@ class TemplateSwitch(BaseEntityModel):
     """Template switch helper."""
 
     entry_id: str
-    id: str | None = None  # Entity ID (e.g., switch.my_template) - optional, for renaming
+    id: str | None = Field(default=None, pattern=r"^[a-z0-9_]+\.[a-z0-9_]+$")  # Entity ID (e.g., switch.my_template) - optional, for renaming
     name: str
     step_id: Literal["switch"] = "switch"
     value_template: str | None = None
@@ -250,7 +250,7 @@ class GroupBinarySensor(BaseEntityModel):
     """Group binary sensor helper."""
 
     entry_id: str
-    id: str | None = None  # Entity ID (e.g., binary_sensor.all_motion) - optional, for renaming
+    id: str | None = Field(default=None, pattern=r"^[a-z0-9_]+\.[a-z0-9_]+$")  # Entity ID (e.g., binary_sensor.all_motion) - optional, for renaming
     name: str
     step_id: Literal["binary_sensor"] = "binary_sensor"
     entities: list[str] = Field(default_factory=list)
@@ -262,7 +262,7 @@ class GroupSensor(BaseEntityModel):
     """Group sensor helper."""
 
     entry_id: str
-    id: str | None = None  # Entity ID (e.g., sensor.average_temp) - optional, for renaming
+    id: str | None = Field(default=None, pattern=r"^[a-z0-9_]+\.[a-z0-9_]+$")  # Entity ID (e.g., sensor.average_temp) - optional, for renaming
     name: str
     step_id: Literal["sensor"] = "sensor"
     entities: list[str] = Field(default_factory=list)
@@ -274,7 +274,7 @@ class GroupLight(BaseEntityModel):
     """Group light helper."""
 
     entry_id: str
-    id: str | None = None  # Entity ID (e.g., light.all_lights) - optional, for renaming
+    id: str | None = Field(default=None, pattern=r"^[a-z0-9_]+\.[a-z0-9_]+$")  # Entity ID (e.g., light.all_lights) - optional, for renaming
     name: str
     step_id: Literal["light"] = "light"
     entities: list[str] = Field(default_factory=list)
@@ -354,7 +354,7 @@ class IntegrationHelper(BaseEntityModel):
     """Integration helper (Riemann sum integral - converts power to energy)."""
 
     entry_id: str
-    id: str | None = None  # Entity ID (e.g., sensor.energy_total) - optional, for renaming
+    id: str | None = Field(default=None, pattern=r"^[a-z0-9_]+\.[a-z0-9_]+$")  # Entity ID (e.g., sensor.energy_total) - optional, for renaming
     name: str
     source: str  # Source sensor entity_id
     method: str = "trapezoidal"  # left, right, trapezoidal
@@ -366,7 +366,7 @@ class UtilityMeterHelper(BaseEntityModel):
     """Utility meter helper (tracks consumption over time periods)."""
 
     entry_id: str
-    id: str | None = None  # Entity ID (e.g., sensor.electricity_daily) - optional, for renaming
+    id: str | None = Field(default=None, pattern=r"^[a-z0-9_]+\.[a-z0-9_]+$")  # Entity ID (e.g., sensor.electricity_daily) - optional, for renaming
     name: str
     source: str  # Source sensor entity_id
     cycle: str | None = None  # hourly, daily, weekly, monthly, quarterly, yearly
@@ -382,7 +382,7 @@ class ThresholdHelper(BaseEntityModel):
     """Threshold helper (binary sensor based on numeric threshold)."""
 
     entry_id: str
-    id: str | None = None  # Entity ID (e.g., binary_sensor.motion_detected) - for renaming
+    id: str | None = Field(default=None, pattern=r"^[a-z0-9_]+\.[a-z0-9_]+$")  # Entity ID (e.g., binary_sensor.motion_detected) - for renaming
     name: str
     entity_id: str  # Source entity to monitor
     hysteresis: float = 0.0
@@ -394,7 +394,7 @@ class TodHelper(BaseEntityModel):
     """Time of Day helper (binary sensor for time periods)."""
 
     entry_id: str
-    id: str | None = None  # Entity ID (e.g., binary_sensor.daytime) - optional, for renaming
+    id: str | None = Field(default=None, pattern=r"^[a-z0-9_]+\.[a-z0-9_]+$")  # Entity ID (e.g., binary_sensor.daytime) - optional, for renaming
     name: str
     after_time: str  # HH:MM:SS format
     before_time: str  # HH:MM:SS format
