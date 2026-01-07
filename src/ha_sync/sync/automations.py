@@ -73,13 +73,19 @@ class AutomationSyncer(BaseSyncer):
         return result
 
     @logfire.instrument("Pull automations")
-    async def pull(self, sync_deletions: bool = False, dry_run: bool = False) -> SyncResult:
+    async def pull(
+        self,
+        sync_deletions: bool = False,
+        dry_run: bool = False,
+        remote: dict[str, Any] | None = None,
+    ) -> SyncResult:
         """Pull automations from Home Assistant to local files."""
         result = SyncResult(created=[], updated=[], deleted=[], renamed=[], errors=[])
 
         if not dry_run:
             self.local_path.mkdir(parents=True, exist_ok=True)
-        remote = await self.get_remote_entities()
+        if remote is None:
+            remote = await self.get_remote_entities()
         local = self.get_local_entities()
 
         # Track used filenames to handle collisions

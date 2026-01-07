@@ -61,8 +61,9 @@ Bidirectional sync that pulls remote changes, merges with local uncommitted chan
 # Sync all entity types
 uv run ha-sync sync
 
-# Sync specific type
-uv run ha-sync sync automations
+# Sync specific paths (one or more)
+uv run ha-sync sync automations/
+uv run ha-sync sync automations/ scripts/
 ```
 
 If there are only remote changes, pulls without confirmation. If there are local changes to push, asks for confirmation. In a git repo, auto-stashes local changes before pull and restores after.
@@ -75,10 +76,9 @@ Pull entities from Home Assistant to local YAML files:
 # Pull all entity types
 uv run ha-sync pull
 
-# Pull specific type
-uv run ha-sync pull automations
-uv run ha-sync pull dashboards
-uv run ha-sync pull helpers
+# Pull specific paths (one or more)
+uv run ha-sync pull automations/
+uv run ha-sync pull automations/ dashboards/ helpers/
 
 # Delete local files not in Home Assistant
 uv run ha-sync pull --sync-deletions
@@ -94,8 +94,9 @@ Push local YAML files to Home Assistant:
 # Push all entity types
 uv run ha-sync push
 
-# Push specific type
-uv run ha-sync push automations
+# Push specific paths (one or more)
+uv run ha-sync push automations/
+uv run ha-sync push automations/my-auto.yaml scripts/my-script.yaml
 
 # Dry run (show what would change)
 uv run ha-sync push --dry-run
@@ -115,7 +116,8 @@ Show differences between local and remote:
 
 ```bash
 uv run ha-sync diff
-uv run ha-sync diff automations
+uv run ha-sync diff automations/
+uv run ha-sync diff automations/ helpers/template/
 ```
 
 ### Validate
@@ -125,6 +127,9 @@ Validate local YAML files:
 ```bash
 # Basic validation
 uv run ha-sync validate
+
+# Validate specific paths
+uv run ha-sync validate automations/ helpers/
 
 # Also validate Jinja2 templates against HA
 uv run ha-sync validate --check-templates
