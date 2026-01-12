@@ -73,8 +73,12 @@ def git_stash(paths: list[str] | None = None) -> GitStashResult:
     try:
         cmd = ["git", "stash", "push", "-m", "ha-sync autostash"]
         if paths:
-            cmd.append("--")
-            cmd.extend(paths)
+            # Filter to only paths that have git changes (not just exist)
+            # Git stash fails on paths with no changes even if they exist
+            paths_with_changes = [p for p in paths if git_has_changes([p])]
+            if paths_with_changes:
+                cmd.append("--")
+                cmd.extend(paths_with_changes)
         result = subprocess.run(
             cmd,
             capture_output=True,

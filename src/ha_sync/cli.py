@@ -569,7 +569,15 @@ def _validate_impl(
         else:
             # Filter to only changed files if diff_only mode
             if diff_only and changed_files:
-                filtered = [t for t in templates_to_check if t[0] in changed_files]
+
+                def _file_in_changed(file_path: str) -> bool:
+                    """Check if file is in or under any changed path."""
+                    for changed in changed_files:
+                        if file_path == changed or file_path.startswith(changed + "/"):
+                            return True
+                    return False
+
+                filtered = [t for t in templates_to_check if _file_in_changed(t[0])]
                 if not filtered:
                     console.print("[dim]No templates in changed files[/dim]")
                 else:
@@ -670,9 +678,29 @@ async def _get_diff_items(config: SyncConfig, paths: list[str] | None) -> list[D
 
 
 def _matches_filter(file_path: str, file_filter: Path) -> bool:
-    """Check if a file path matches the filter."""
+    """Check if a file path matches the filter.
+
+    Handles these cases:
+    1. file_path starts with filter (e.g., filter="automations/", file_path="automations/foo.yaml")
+    2. file_path equals filter exactly
+    3. filter is a file within file_path directory (e.g., filter="dashboards/welcome/00_oasis.yaml",
+       file_path="dashboards/welcome" - filter is under the file_path directory)
+    """
     filter_str = str(file_filter)
-    return file_path.startswith(filter_str) or file_path == filter_str
+    file_path_obj = Path(file_path)
+
+    # Direct match or prefix match
+    if file_path.startswith(filter_str) or file_path == filter_str:
+        return True
+
+    # Check if filter is a file within the file_path directory
+    # This handles dashboards where file_path is a directory like "dashboards/welcome"
+    # but the user specifies a file like "dashboards/welcome/00_oasis.yaml"
+    if file_filter.suffix and not file_path_obj.suffix:
+        # filter is a file, file_path is a directory
+        return file_filter.parent == file_path_obj
+
+    return False
 
 
 def _display_diff_items(items: list[DiffItem], direction: str = "push") -> None:
@@ -906,6 +934,112 @@ def pull(
             _handle_stash_pop(stashed)
 
 
+async def _get_sync_diffs(
+    config: SyncConfig,
+    paths: list[str] | None,
+    sync_deletions: bool,
+    in_git: bool,
+    has_local_changes: bool,
+) -> tuple[list[DiffItem], list[DiffItem], dict[str, dict]]:
+    """Get both pull and push diffs efficiently with single API fetch.
+
+    For accurate pull_diff when there are uncommitted changes, we need to
+    temporarily stash and compute the diff against clean working tree.
+
+    Returns:
+        Tuple of (pull_diff, push_diff, remote_cache)
+    """
+    push_diff: list[DiffItem] = []
+    pull_diff: list[DiffItem] = []
+
+    async with HAClient(config.url, config.token) as client:
+        syncers_with_filters = await get_syncers_for_paths(client, config, paths)
+
+        # Cache remote data for all syncers (single API fetch per syncer type)
+        remote_cache: dict[str, dict] = {}
+        for syncer, _ in syncers_with_filters:
+            remote_cache[syncer.entity_type] = await syncer.get_remote_entities()
+
+        # Step 1: Compute push_diff (dirty working tree vs remote)
+        if has_local_changes:
+            for syncer, file_filters in syncers_with_filters:
+                remote = remote_cache[syncer.entity_type]
+                syncer_items = await syncer.diff(remote=remote)
+
+                # Filter for push: adds, modifies, renames; deletes only if sync_deletions
+                push_items = [
+                    item
+                    for item in syncer_items
+                    if item.status in ("renamed", "added", "modified")
+                    or (item.status == "deleted" and sync_deletions)
+                ]
+
+                if file_filters:
+                    push_items = [
+                        item
+                        for item in push_items
+                        if item.file_path
+                        and any(_matches_filter(item.file_path, f) for f in file_filters)
+                    ]
+                push_diff.extend(push_items)
+
+        # Step 2: Stash if needed for accurate pull_diff
+        stashed = False
+        if in_git and has_local_changes:
+            stash_result = git_stash(MANAGED_FOLDERS)
+            stashed = stash_result.stashed
+
+        # Step 3: Compute pull_diff (clean working tree vs remote)
+        try:
+            for syncer, file_filters in syncers_with_filters:
+                remote = remote_cache[syncer.entity_type]
+                syncer_items = await syncer.diff(remote=remote)
+
+                # For pull, flip the perspective:
+                # - "deleted" (remote has, local doesn't) -> "added" (will create locally)
+                # - "modified" stays as-is
+                # - "added" (local has, remote doesn't) -> "deleted" (will delete if sync_deletions)
+                pull_items = []
+                for item in syncer_items:
+                    if item.status == "deleted":
+                        pull_items.append(
+                            DiffItem(
+                                entity_id=item.entity_id,
+                                status="added",
+                                local=item.local,
+                                remote=item.remote,
+                                file_path=item.file_path,
+                            )
+                        )
+                    elif item.status == "modified":
+                        pull_items.append(item)
+                    elif item.status == "added" and sync_deletions:
+                        pull_items.append(
+                            DiffItem(
+                                entity_id=item.entity_id,
+                                status="deleted",
+                                local=item.local,
+                                remote=item.remote,
+                                file_path=item.file_path,
+                            )
+                        )
+
+                if file_filters:
+                    pull_items = [
+                        item
+                        for item in pull_items
+                        if item.file_path
+                        and any(_matches_filter(item.file_path, f) for f in file_filters)
+                    ]
+                pull_diff.extend(pull_items)
+        finally:
+            # Step 4: Restore stash
+            if stashed:
+                git_stash_pop()
+
+    return pull_diff, push_diff, remote_cache
+
+
 async def _get_pull_diff(
     config: SyncConfig, paths: list[str] | None, sync_deletions: bool
 ) -> list[DiffItem]:
@@ -958,15 +1092,27 @@ async def _get_pull_diff(
 
 
 async def _pull(
-    config: SyncConfig, paths: list[str] | None, sync_deletions: bool, dry_run: bool = False
+    config: SyncConfig,
+    paths: list[str] | None,
+    sync_deletions: bool,
+    dry_run: bool = False,
+    remote_cache: dict[str, dict] | None = None,
 ) -> None:
-    """Pull entities from Home Assistant."""
+    """Pull entities from Home Assistant.
+
+    Args:
+        remote_cache: Pre-fetched remote entities by entity_type (skips API calls if provided).
+    """
     async with HAClient(config.url, config.token) as client:
         syncers_with_filters = await get_syncers_for_paths(client, config, paths)
 
         for syncer, _file_filters in syncers_with_filters:
             console.print(f"\n[bold]Pulling {syncer.entity_type}s...[/bold]")
-            result = await syncer.pull(sync_deletions=sync_deletions, dry_run=dry_run)
+            # Use cached remote data if available
+            remote = remote_cache.get(syncer.entity_type) if remote_cache else None
+            result = await syncer.pull(
+                sync_deletions=sync_deletions, dry_run=dry_run, remote=remote
+            )
 
             if not result.has_changes:
                 console.print("  [dim]No changes[/dim]")
@@ -1469,6 +1615,10 @@ def sync(
         bool,
         typer.Option("--yes", "-y", help="Skip confirmation and autostash"),
     ] = False,
+    dry_run: Annotated[
+        bool,
+        typer.Option("--dry-run", "-n", help="Show what would be synced without making changes"),
+    ] = False,
 ) -> None:
     """Bidirectional sync: pull from HA, merge local changes, push back.
 
@@ -1481,15 +1631,18 @@ def sync(
     If conflicts are detected after restoring the stash, the command stops
     and asks you to resolve them manually before pushing.
     """
-    with logfire.span("ha-sync sync", paths=paths, yes=yes):
+    with logfire.span("ha-sync sync", paths=paths, yes=yes, dry_run=dry_run):
         config = get_config()
         if not config.url or not config.token:
             console.print("[red]Missing HA_URL or HA_TOKEN.[/red] Set them in .env file.")
             raise typer.Exit(1)
 
+        if dry_run:
+            console.print("[cyan]Dry run mode - showing what would be synced[/cyan]\n")
+
         # Check if we're in a git repo
         in_git = is_git_repo()
-        if not in_git and not yes:
+        if not in_git and not yes and not dry_run:
             console.print(
                 "[yellow]Warning:[/yellow] Not in a git repo. "
                 "Local changes may be overwritten during pull."
@@ -1503,23 +1656,23 @@ def sync(
 
         has_local_changes = git_has_changes(MANAGED_FOLDERS) if in_git else True
 
-        # Step 1: Show remote changes (will be pulled first)
-        console.print("[bold]Remote changes (will be pulled):[/bold]\n")
-        pull_diff = asyncio.run(_get_pull_diff(config, paths, sync_deletions))
+        # Fetch all diffs in one API call, computing both push and pull diffs
+        # by temporarily stashing if needed
+        console.print("[dim]Fetching remote state...[/dim]")
+        pull_diff, push_diff, remote_cache = asyncio.run(
+            _get_sync_diffs(config, paths, sync_deletions, in_git, has_local_changes)
+        )
 
+        # Display remote changes
+        console.print("\n[bold]Remote changes (will be pulled):[/bold]\n")
         if pull_diff:
             _display_diff_items(pull_diff, direction="pull")
         else:
             console.print("[dim]No remote changes[/dim]\n")
 
-        # Step 2: Check local uncommitted changes
-        # Only compute full diff if git shows uncommitted changes (fast path)
-        push_diff: list[DiffItem] = []
+        # Display local changes
         if has_local_changes:
             console.print("[bold]Your uncommitted changes (will be pushed after merge):[/bold]\n")
-            push_diff = asyncio.run(
-                _get_push_diff(config, paths, all_items=False, sync_deletions=sync_deletions)
-            )
             if push_diff:
                 _display_diff_items(push_diff, direction="push")
             else:
@@ -1532,10 +1685,17 @@ def sync(
             console.print("[dim]Everything is in sync[/dim]")
             return
 
+        # Dry run stops here
+        if dry_run:
+            console.print("[cyan]Dry run complete - no changes made[/cyan]")
+            return
+
         # If only remote changes (no local changes), just pull without confirmation
         if pull_diff and not push_diff:
             console.print("[bold]Pulling from Home Assistant...[/bold]")
-            asyncio.run(_pull(config, paths, sync_deletions, dry_run=False))
+            asyncio.run(
+                _pull(config, paths, sync_deletions, dry_run=False, remote_cache=remote_cache)
+            )
             console.print("\n[green]Sync complete![/green]")
             return
 
@@ -1563,10 +1723,12 @@ def sync(
                 console.print("[dim]Stashed local changes in managed folders[/dim]")
                 stashed = True
 
-        # Execute pull
+        # Execute pull (using cached remote data to avoid re-fetching)
         if pull_diff:
             console.print("\n[bold]Pulling from Home Assistant...[/bold]")
-            asyncio.run(_pull(config, paths, sync_deletions, dry_run=False))
+            asyncio.run(
+                _pull(config, paths, sync_deletions, dry_run=False, remote_cache=remote_cache)
+            )
 
         # Restore stash
         if stashed:
@@ -1584,15 +1746,11 @@ def sync(
                     raise typer.Exit(1)
             console.print("[dim]Restored stashed changes[/dim]")
 
-        # Step 4: Push (re-calculate diff after pull + stash pop)
-        console.print("\n[bold]Checking for changes to push...[/bold]")
-        push_diff_after = asyncio.run(
-            _get_push_diff(config, paths, all_items=False, sync_deletions=sync_deletions)
-        )
-
-        if push_diff_after:
-            # Only push the specific paths that have changes, with pre-computed diff
-            changed_paths = list({item.file_path for item in push_diff_after if item.file_path})
+        # Step 4: Push using pre-computed push_diff (no need to re-fetch)
+        # After stash pop without conflicts, our uncommitted changes are restored,
+        # so the diff should be the same as what we computed in the preview
+        if push_diff:
+            changed_paths = list({item.file_path for item in push_diff if item.file_path})
             console.print("\n[bold]Pushing to Home Assistant...[/bold]")
             asyncio.run(
                 _push(
@@ -1601,11 +1759,11 @@ def sync(
                     all_items=False,
                     sync_deletions=sync_deletions,
                     dry_run=False,
-                    diff_items=push_diff_after,
+                    diff_items=push_diff,
                 )
             )
         else:
-            console.print("[dim]No changes to push after merge[/dim]")
+            console.print("[dim]No changes to push[/dim]")
 
         console.print("\n[green]Sync complete![/green]")
 

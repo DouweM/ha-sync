@@ -64,12 +64,18 @@ class BaseSyncer(ABC):
         ...
 
     @abstractmethod
-    async def pull(self, sync_deletions: bool = False, dry_run: bool = False) -> SyncResult:
+    async def pull(
+        self,
+        sync_deletions: bool = False,
+        dry_run: bool = False,
+        remote: dict[str, Any] | None = None,
+    ) -> SyncResult:
         """Pull entities from Home Assistant to local files.
 
         Args:
             sync_deletions: If True, delete local files that don't exist remotely.
             dry_run: If True, show what would be done without making changes.
+            remote: Pre-fetched remote entities (skips API call if provided).
         """
         ...
 
@@ -194,14 +200,20 @@ class SimpleEntitySyncer(BaseSyncer):
         """Reload entities in Home Assistant."""
         ...
 
-    async def pull(self, sync_deletions: bool = False, dry_run: bool = False) -> SyncResult:
+    async def pull(
+        self,
+        sync_deletions: bool = False,
+        dry_run: bool = False,
+        remote: dict[str, Any] | None = None,
+    ) -> SyncResult:
         """Pull entities from Home Assistant to local files."""
         with logfire.span("Pull {entity_type}s", entity_type=self.entity_type, dry_run=dry_run):
             result = SyncResult(created=[], updated=[], deleted=[], renamed=[], errors=[])
 
             if not dry_run:
                 self.local_path.mkdir(parents=True, exist_ok=True)
-            remote = await self.get_remote_entities()
+            if remote is None:
+                remote = await self.get_remote_entities()
             local = self.get_local_entities()
 
             for entity_id, config in remote.items():
