@@ -220,7 +220,15 @@ class AutomationSyncer(BaseSyncer):
 
                 if item.status == "added":
                     config = local.get(auto_id, {})
-                    push_config = {k: v for k, v in config.items() if not k.startswith("_")}
+                    # Normalize to ensure consistent format (singular -> plural fields)
+                    # Exclude 'id' from body - it's already in the URL path
+                    push_config = {
+                        k: v
+                        for k, v in Automation.normalize(
+                            {k: v for k, v in config.items() if not k.startswith("_")}
+                        ).items()
+                        if k != "id"
+                    }
                     alias = config.get("alias", "")
                     current_filename = config.get("_filename", "")
                     file_path = self.local_path / (
@@ -252,7 +260,15 @@ class AutomationSyncer(BaseSyncer):
 
                 elif item.status == "modified":
                     config = local.get(auto_id, {})
-                    push_config = {k: v for k, v in config.items() if not k.startswith("_")}
+                    # Normalize to ensure consistent format (singular -> plural fields)
+                    # Exclude 'id' from body - it's already in the URL path
+                    push_config = {
+                        k: v
+                        for k, v in Automation.normalize(
+                            {k: v for k, v in config.items() if not k.startswith("_")}
+                        ).items()
+                        if k != "id"
+                    }
                     alias = config.get("alias", "")
                     current_filename = config.get("_filename", "")
                     file_path = self.local_path / (

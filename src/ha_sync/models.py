@@ -42,15 +42,43 @@ class BaseEntityModel(BaseModel):
 
 
 class Automation(BaseEntityModel):
-    """Home Assistant automation."""
+    """Home Assistant automation.
+
+    Note: HA uses 'triggers', 'conditions', 'actions' (plural) in newer versions.
+    The model normalizes to plural form but accepts both for compatibility.
+    """
 
     id: str = Field(pattern=r"^[a-z0-9_]+$")
     alias: str = ""
     description: str = ""
-    trigger: list[dict[str, Any]] = Field(default_factory=list)
-    condition: list[dict[str, Any]] = Field(default_factory=list)
-    action: list[dict[str, Any]] = Field(default_factory=list)
+    triggers: list[dict[str, Any]] = Field(default_factory=list)
+    conditions: list[dict[str, Any]] = Field(default_factory=list)
+    actions: list[dict[str, Any]] = Field(default_factory=list)
     mode: Literal["single", "restart", "queued", "parallel"] = "single"
+
+    @classmethod
+    def normalize(cls, data: dict[str, Any]) -> dict[str, Any]:
+        """Validate data and return ordered dict with normalized field names.
+
+        Handles both singular (trigger/condition/action) and plural forms,
+        normalizing to plural (triggers/conditions/actions).
+        """
+        # First, normalize singular to plural (newer HA format)
+        normalized = dict(data)
+
+        # Map singular to plural, merging if both exist
+        for singular, plural in [
+            ("trigger", "triggers"),
+            ("condition", "conditions"),
+            ("action", "actions"),
+        ]:
+            if singular in normalized:
+                singular_val = normalized.pop(singular)
+                # Only use singular value if plural is not set or is empty
+                if plural not in normalized or not normalized[plural]:
+                    normalized[plural] = singular_val
+
+        return cls.model_validate(normalized).model_dump(exclude_none=True)
 
 
 # =============================================================================

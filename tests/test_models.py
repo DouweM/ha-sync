@@ -84,12 +84,12 @@ class TestAutomation:
     """Tests for Automation model."""
 
     def test_basic_validation(self) -> None:
-        """Test basic automation validation."""
+        """Test basic automation validation with plural fields."""
         data = {
             "id": "test_auto",
             "alias": "Test Automation",
-            "trigger": [{"platform": "state"}],
-            "action": [{"service": "light.turn_on"}],
+            "triggers": [{"platform": "state"}],
+            "actions": [{"service": "light.turn_on"}],
         }
         auto = Automation.model_validate(data)
         assert auto.id == "test_auto"
@@ -98,8 +98,8 @@ class TestAutomation:
     def test_field_order_preserved(self) -> None:
         """Test that field order matches model definition."""
         data = {
-            "action": [{"service": "light.turn_on"}],
-            "trigger": [{"platform": "state"}],
+            "actions": [{"service": "light.turn_on"}],
+            "triggers": [{"platform": "state"}],
             "alias": "Test",
             "id": "test_auto",
         }
@@ -108,7 +108,40 @@ class TestAutomation:
 
         keys = list(dumped.keys())
         assert keys.index("id") < keys.index("alias")
-        assert keys.index("trigger") < keys.index("action")
+        assert keys.index("triggers") < keys.index("actions")
+
+    def test_normalize_singular_to_plural(self) -> None:
+        """Test that singular field names are normalized to plural."""
+        data = {
+            "id": "test_auto",
+            "alias": "Test",
+            "trigger": [{"platform": "state"}],
+            "condition": [{"condition": "state"}],
+            "action": [{"service": "light.turn_on"}],
+        }
+        normalized = Automation.normalize(data)
+        assert "triggers" in normalized
+        assert "conditions" in normalized
+        assert "actions" in normalized
+        assert "trigger" not in normalized
+        assert "condition" not in normalized
+        assert "action" not in normalized
+
+    def test_normalize_mixed_fields(self) -> None:
+        """Test that when both singular and plural exist, plural takes precedence."""
+        data = {
+            "id": "test_auto",
+            "alias": "Test",
+            "trigger": [],  # Empty singular
+            "triggers": [{"platform": "state"}],  # Non-empty plural
+            "action": [],
+            "actions": [{"service": "light.turn_on"}],
+        }
+        normalized = Automation.normalize(data)
+        assert normalized["triggers"] == [{"platform": "state"}]
+        assert normalized["actions"] == [{"service": "light.turn_on"}]
+        assert "trigger" not in normalized
+        assert "action" not in normalized
 
 
 class TestScene:
