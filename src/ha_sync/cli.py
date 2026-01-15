@@ -703,6 +703,49 @@ def _matches_filter(file_path: str, file_filter: Path) -> bool:
     return False
 
 
+def _record_file_states(diff_items: list[DiffItem]) -> dict[str, float]:
+    """Record the modification times of files in diff_items.
+
+    This is used for staleness detection - we record the state when diff is computed,
+    then check if files changed before executing the push.
+
+    Args:
+        diff_items: List of diff items to record states for
+
+    Returns:
+        Dict mapping file paths to their mtime (modification time)
+    """
+    states: dict[str, float] = {}
+    for item in diff_items:
+        if item.file_path:
+            file_path = Path(item.file_path)
+            if file_path.exists():
+                states[item.file_path] = file_path.stat().st_mtime
+    return states
+
+
+def _check_file_staleness(recorded_states: dict[str, float]) -> list[str]:
+    """Check if any files have changed since their states were recorded.
+
+    Args:
+        recorded_states: Dict mapping file paths to their recorded mtime
+
+    Returns:
+        List of file paths that have changed (stale files)
+    """
+    stale_files: list[str] = []
+    for file_path_str, recorded_mtime in recorded_states.items():
+        file_path = Path(file_path_str)
+        if file_path.exists():
+            current_mtime = file_path.stat().st_mtime
+            if current_mtime != recorded_mtime:
+                stale_files.append(file_path_str)
+        else:
+            # File was deleted - this is also a change
+            stale_files.append(file_path_str)
+    return stale_files
+
+
 def _display_diff_items(items: list[DiffItem], direction: str = "push") -> None:
     """Display diff items with content diffs for modified items.
 
@@ -1172,6 +1215,9 @@ def push(
             console.print("[dim]No changes to push[/dim]")
             return
 
+        # Record file states for staleness detection
+        file_states = _record_file_states(diff_items)
+
         # Show preview
         _display_diff_items(diff_items, direction="push")
 
@@ -1180,9 +1226,19 @@ def push(
             console.print("[dim]Aborted[/dim]")
             raise typer.Exit(0)
 
-        # Execute push
+        # Check for staleness before executing push
+        stale_files = _check_file_staleness(file_states)
+        if stale_files:
+            console.print("\n[red]Error: Files changed since diff was computed![/red]")
+            console.print("Changed files:")
+            for file_path in stale_files:
+                console.print(f"  - {file_path}")
+            console.print("\n[dim]Re-run the command to see the updated diff.[/dim]")
+            raise typer.Exit(1)
+
+        # Execute push with pre-computed diff_items to ensure consistency
         console.print()
-        asyncio.run(_push(config, paths, all_items, sync_deletions, dry_run=False))
+        asyncio.run(_push(config, paths, all_items, sync_deletions, dry_run=False, diff_items=diff_items))
 
 
 async def _get_push_diff(

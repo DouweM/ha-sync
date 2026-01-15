@@ -171,14 +171,30 @@ class AutomationSyncer(BaseSyncer):
         dry_run: bool = False,
         diff_items: list[DiffItem] | None = None,
     ) -> SyncResult:
-        """Push local automations to Home Assistant."""
+        """Push local automations to Home Assistant.
+
+        Args:
+            force: If True, push all local entities regardless of changes.
+            sync_deletions: If True, delete remote entities not in local files.
+            dry_run: If True, only show what would be done without making changes.
+            diff_items: Pre-computed diff items. If provided (and force=False),
+                       these are used directly without recomputing. This ensures
+                       the actual push matches the diff that was shown to the user.
+        """
         result = SyncResult(created=[], updated=[], deleted=[], renamed=[], errors=[])
 
-        remote = await self.get_remote_entities()
         local = self.get_local_entities()
+
+        # Determine whether we need to fetch remote entities
+        # Only fetch if: force mode (need to rebuild diff), or no diff_items provided
+        need_remote = force or diff_items is None
+        remote: dict[str, Any] | None = None
+        if need_remote:
+            remote = await self.get_remote_entities()
 
         # When force=True, push all local items; otherwise only push changed items
         if force:
+            assert remote is not None  # Guaranteed by need_remote logic
             # Build diff items for all local entities
             diff_items = []
             for auto_id, local_config in local.items():
@@ -203,12 +219,14 @@ class AutomationSyncer(BaseSyncer):
                         diff_items.append(
                             DiffItem(entity_id=auto_id, status="deleted", remote=remote[auto_id])
                         )
-        else:
-            # Pass remote to avoid re-fetching
+        elif diff_items is None:
+            # No pre-computed diff provided, compute fresh
+            assert remote is not None  # Guaranteed by need_remote logic
             diff_items = await self.diff(remote=remote)
             if not diff_items:
                 console.print("  [dim]No changes to push[/dim]")
                 return result
+        # else: Use the provided diff_items directly (the key fix!)
 
         # Track files to rename after successful push
         files_to_rename: list[tuple[Path, Path]] = []
@@ -341,7 +359,8 @@ class AutomationSyncer(BaseSyncer):
                 console.print(f"  [cyan]Would rename[/cyan] {old_rel} -> {new_rel}")
 
         # Warn about remote items without local counterpart
-        if not sync_deletions:
+        # Only show if we have remote data (not when using pre-computed diff_items)
+        if not sync_deletions and remote is not None:
             orphaned = [aid for aid in remote if aid not in local]
             if orphaned:
                 console.print(

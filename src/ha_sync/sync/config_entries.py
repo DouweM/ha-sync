@@ -438,17 +438,40 @@ class ConfigEntrySyncer(BaseSyncer):
         dry_run: bool = False,
         diff_items: list[DiffItem] | None = None,
     ) -> SyncResult:
-        """Push local helpers to Home Assistant."""
+        """Push local helpers to Home Assistant.
+
+        Args:
+            force: If True, push all local entities regardless of changes.
+            sync_deletions: If True, delete remote helpers not in local files.
+            dry_run: If True, only show what would be done without making changes.
+            diff_items: Pre-computed diff items. If provided (and force=False),
+                       these are used directly without recomputing. This ensures
+                       the actual push matches the diff that was shown to the user.
+        """
         result = SyncResult(created=[], updated=[], deleted=[], renamed=[], errors=[])
 
         # Invalidate entity registry cache for fresh data
         self._invalidate_entity_registry_cache()
 
         local = self.get_local_entities()
-        remote = await self.get_remote_entities()
 
-        # Get diff to determine what needs syncing (pass remote to avoid re-fetching)
-        diff_items = await self.diff(remote=remote)
+        # Determine whether we need to fetch remote entities
+        # We need remote for: force mode, no diff_items, or if diff_items has deletions
+        has_deletions = diff_items and any(item.status == "deleted" for item in diff_items)
+        need_remote = force or diff_items is None or has_deletions
+        remote: dict[str, Any] | None = None
+        if need_remote:
+            remote = await self.get_remote_entities()
+
+        # Determine what to process
+        if force or diff_items is None:
+            assert remote is not None  # Guaranteed by need_remote logic
+            # Force mode or no pre-computed diff: compute fresh diff
+            diff_items = await self.diff(remote=remote)
+        # else: Use the provided diff_items directly (the key fix!)
+
+        # Build a map of diff_item status by entity_id for quick lookup
+        diff_status_map = {item.entity_id: item.status for item in diff_items}
 
         # Determine items to create/update
         if force:
@@ -471,7 +494,13 @@ class ConfigEntrySyncer(BaseSyncer):
             file_path = self.local_path / (current_filename or filename_from_name(name, entry_id))
             rel_path = relative_path(file_path)
 
-            is_update = entry_id in remote
+            # Determine if this is an update (existing in remote) or create (new)
+            # Use diff_item status when remote is not fetched, otherwise check remote directly
+            if remote is not None:
+                is_update = entry_id in remote
+            else:
+                # Infer from diff_item status: "modified" means it exists in remote
+                is_update = diff_status_map.get(entry_id) == "modified"
 
             try:
                 if is_update:
@@ -534,6 +563,9 @@ class ConfigEntrySyncer(BaseSyncer):
                 console.print(f"  [red]Error[/red] {rel_path}: {e}")
 
         if sync_deletions:
+            # remote is guaranteed to be fetched for deletions (has_deletions check or force mode)
+            assert remote is not None
+
             if force:
                 # Force mode: delete all remote items not in local
                 items_to_delete = [entry_id for entry_id in remote if entry_id not in local]
@@ -560,12 +592,15 @@ class ConfigEntrySyncer(BaseSyncer):
                     result.errors.append((entry_id, str(e)))
                     console.print(f"  [red]Error deleting[/red] {rel_path}: {e}")
         else:
-            orphaned = [eid for eid in remote if eid not in local]
-            if orphaned:
-                console.print(
-                    f"  [dim]{len(orphaned)} remote item(s) not in local files "
-                    "(use --sync-deletions to remove)[/dim]"
-                )
+            # Warn about remote items without local counterpart
+            # Only show if we have remote data (not when using pre-computed diff_items)
+            if remote is not None:
+                orphaned = [eid for eid in remote if eid not in local]
+                if orphaned:
+                    console.print(
+                        f"  [dim]{len(orphaned)} remote item(s) not in local files "
+                        "(use --sync-deletions to remove)[/dim]"
+                    )
 
         return result
 

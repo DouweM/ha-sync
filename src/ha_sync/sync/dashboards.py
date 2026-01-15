@@ -347,14 +347,36 @@ class DashboardSyncer(BaseSyncer):
         dry_run: bool = False,
         diff_items: list[DiffItem] | None = None,
     ) -> SyncResult:
-        """Push local dashboards to Home Assistant."""
+        """Push local dashboards to Home Assistant.
+
+        Args:
+            force: If True, push all local entities regardless of changes.
+            sync_deletions: If True, delete remote dashboards not in local files.
+            dry_run: If True, only show what would be done without making changes.
+            diff_items: Pre-computed diff items. If provided (and force=False),
+                       these are used directly without recomputing. This ensures
+                       the actual push matches the diff that was shown to the user.
+        """
         result = SyncResult(created=[], updated=[], deleted=[], renamed=[], errors=[])
 
         local = self.get_local_entities()
-        remote = await self.get_remote_entities()
 
-        # Get diff to determine what needs syncing (pass remote to avoid re-fetching)
-        diff_items = await self.diff(remote=remote)
+        # Determine whether we need to fetch remote entities
+        # We need remote for: force mode, no diff_items, or if diff_items has renames/deletions
+        # (renames/deletions need url_path from remote metadata)
+        has_renames = diff_items and any(item.status == "renamed" for item in diff_items)
+        has_deletions = diff_items and any(item.status == "deleted" for item in diff_items)
+        need_remote = force or diff_items is None or has_renames or has_deletions
+        remote: dict[str, Any] | None = None
+        if need_remote:
+            remote = await self.get_remote_entities()
+
+        # Determine what to process
+        if force or diff_items is None:
+            assert remote is not None  # Guaranteed by need_remote logic
+            # Force mode or no pre-computed diff: compute fresh diff
+            diff_items = await self.diff(remote=remote)
+        # else: Use the provided diff_items directly (the key fix!)
 
         # Track processed items to avoid double-processing
         processed_dirs: set[str] = set()
@@ -363,6 +385,9 @@ class DashboardSyncer(BaseSyncer):
         for item in diff_items:
             if item.status != "renamed" or not item.new_id:
                 continue
+
+            # remote is guaranteed to be fetched when there are renames (has_renames check)
+            assert remote is not None
 
             dir_name = item.entity_id
             old_url_path = remote[dir_name]["meta"].get("url_path")
@@ -405,6 +430,9 @@ class DashboardSyncer(BaseSyncer):
                 result.errors.append((dir_name, str(e)))
                 console.print(f"  [red]Error renaming[/red] {rel_dir_path}/: {e}")
 
+        # Build a map of diff_item status by entity_id for quick lookup
+        diff_status_map = {item.entity_id: item.status for item in diff_items}
+
         # Determine items to create/update
         if force:
             # Force mode: all local items not already processed
@@ -431,7 +459,13 @@ class DashboardSyncer(BaseSyncer):
                 stored_url_path = meta.get("url_path")
                 url_path = url_path_from_dir_name(dir_name, stored_url_path)
 
-                is_update = dir_name in remote
+                # Determine if this is an update (existing in remote) or create (new)
+                # Use diff_item status when remote is not fetched, otherwise check remote directly
+                if remote is not None:
+                    is_update = dir_name in remote
+                else:
+                    # Infer from diff_item status: "modified" means it exists in remote
+                    is_update = diff_status_map.get(dir_name) == "modified"
 
                 if is_update:
                     if dry_run:
@@ -481,7 +515,9 @@ class DashboardSyncer(BaseSyncer):
         # Process deletions
         if sync_deletions:
             if force:
-                # Force mode: delete all remote items not in local
+                # Force mode: remote is guaranteed to be fetched
+                assert remote is not None
+                # Delete all remote items not in local
                 items_to_delete = [
                     dir_name
                     for dir_name in remote
@@ -494,6 +530,8 @@ class DashboardSyncer(BaseSyncer):
                 ]
 
             for dir_name in items_to_delete:
+                # remote is guaranteed to be fetched when there are deletions (has_deletions check)
+                assert remote is not None
                 url_path = remote[dir_name]["meta"].get("url_path")
                 dashboard_dir = self.local_path / dir_name
                 rel_dir_path = relative_path(dashboard_dir)
@@ -512,12 +550,14 @@ class DashboardSyncer(BaseSyncer):
                     console.print(f"  [red]Error deleting[/red] {rel_dir_path}/: {e}")
         else:
             # Warn about remote items without local counterpart
-            orphaned = [d for d in remote if d not in local and d not in processed_dirs]
-            if orphaned:
-                console.print(
-                    f"  [dim]{len(orphaned)} remote dashboard(s) not in local files "
-                    "(use --sync-deletions to remove)[/dim]"
-                )
+            # Only show if we have remote data (not when using pre-computed diff_items)
+            if remote is not None:
+                orphaned = [d for d in remote if d not in local and d not in processed_dirs]
+                if orphaned:
+                    console.print(
+                        f"  [dim]{len(orphaned)} remote dashboard(s) not in local files "
+                        "(use --sync-deletions to remove)[/dim]"
+                    )
 
         # Auto-rename view files to match content (after successful push)
         if not dry_run:
