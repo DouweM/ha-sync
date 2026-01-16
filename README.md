@@ -255,6 +255,10 @@ uv run ruff check src/
 uv run ruff format src/
 ```
 
+## Built with Claude
+
+This project was built with [Claude](https://claude.ai/) and [Claude Code](https://claude.ai/claude-code).
+
 ## License
 
 MIT - see [LICENSE](LICENSE) for details.
