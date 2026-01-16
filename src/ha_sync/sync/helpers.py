@@ -140,10 +140,7 @@ class HelperSyncer(BaseSyncer):
 
             # Validate and order through Pydantic model
             model_class = HELPER_MODELS.get(helper_type)
-            if model_class:
-                ordered = model_class.normalize(config)
-            else:
-                ordered = config
+            ordered = model_class.normalize(config) if model_class else config
 
             file_path = self._helper_path(helper_type) / filename_from_id(helper_id)
 

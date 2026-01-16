@@ -1,13 +1,12 @@
 """Tests for DashboardSyncer."""
 
 from pathlib import Path
-from typing import Any
 
 import pytest
 
 from ha_sync.client import HAClient
-from ha_sync.sync.dashboards import DashboardSyncer
 from ha_sync.sync.base import DiffItem
+from ha_sync.sync.dashboards import DashboardSyncer
 
 from .conftest import MockSyncConfig, SampleDashboard, create_dashboard_files
 

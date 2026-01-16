@@ -653,7 +653,8 @@ class ConfigEntryBasedSyncer(BaseSyncer):
         actual_domain = entity_id.split(".")[0]
         if actual_domain != subtype:
             return (
-                f"Invalid entity_id domain '{actual_domain}' for {self._get_helper_type_name()} {subtype}. "
+                f"Invalid entity_id domain '{actual_domain}' "
+                f"for {self._get_helper_type_name()} {subtype}. "
                 f"Expected '{subtype}'."
             )
         return None
@@ -666,7 +667,6 @@ class ConfigEntryBasedSyncer(BaseSyncer):
         dry_run: bool = False,
     ) -> tuple[str, str] | None:
         """Update entity_id if it differs from local config."""
-        import asyncio
 
         local_id = self._expand_entity_id(local_id, subtype)
 
@@ -736,7 +736,10 @@ class ConfigEntryBasedSyncer(BaseSyncer):
                             "Home Assistant may have added a new type. "
                             "Please report this at https://github.com/DouweM/ha-sync/issues"
                         )
-                        console.print(f"  [yellow]Warning:[/yellow] Unknown {helper_type_name} type '{step_id}'")
+                        console.print(
+                            f"  [yellow]Warning:[/yellow] "
+                            f"Unknown {helper_type_name} type '{step_id}'"
+                        )
 
                     # Fetch entity_id from entity registry
                     entity_entries = await self._get_entity_registry_for_entry(entry_id)
@@ -787,9 +790,11 @@ class ConfigEntryBasedSyncer(BaseSyncer):
         remote: dict[str, Any] | None = None,
     ) -> SyncResult:
         """Pull helpers from Home Assistant to local files."""
-        from ha_sync.utils import dump_yaml, filename_from_name
+        from ha_sync.utils import dump_yaml
 
-        with logfire.span(f"Pull {self.entity_type}s", entity_type=self.entity_type, dry_run=dry_run):
+        with logfire.span(
+            f"Pull {self.entity_type}s", entity_type=self.entity_type, dry_run=dry_run
+        ):
             result = SyncResult(created=[], updated=[], deleted=[], renamed=[], errors=[])
 
             if not dry_run:
@@ -837,7 +842,9 @@ class ConfigEntryBasedSyncer(BaseSyncer):
                         # Existing entry - check if name changed (needs rename)
                         local_data = local[full_id]
                         current_filename = local_data.get("_filename")
-                        expected_filename = self._get_filename(name, entry_id, used_filenames[subtype])
+                        expected_filename = self._get_filename(
+                            name, entry_id, used_filenames[subtype]
+                        )
                         used_filenames[subtype].add(expected_filename)
 
                         # Remove metadata from comparison
@@ -860,7 +867,9 @@ class ConfigEntryBasedSyncer(BaseSyncer):
                                 old_rel = relative_path(old_path)
                                 new_rel = relative_path(new_path)
                                 if dry_run:
-                                    console.print(f"  [cyan]Would rename[/cyan] {old_rel} -> {new_rel}")
+                                    console.print(
+                                        f"  [cyan]Would rename[/cyan] {old_rel} -> {new_rel}"
+                                    )
                                 else:
                                     dump_yaml(ordered, new_path)
                                     old_path.unlink()
@@ -933,7 +942,12 @@ class ConfigEntryBasedSyncer(BaseSyncer):
 
         from ha_sync.utils import dump_yaml, filename_from_name
 
-        with logfire.span(f"Push {self.entity_type}s", entity_type=self.entity_type, force=force, dry_run=dry_run):
+        with logfire.span(
+            f"Push {self.entity_type}s",
+            entity_type=self.entity_type,
+            force=force,
+            dry_run=dry_run,
+        ):
             result = SyncResult(created=[], updated=[], deleted=[], renamed=[], errors=[])
 
             # Invalidate entity registry cache for fresh data
@@ -992,8 +1006,10 @@ class ConfigEntryBasedSyncer(BaseSyncer):
                         if dry_run:
                             console.print(f"  [cyan]Would update[/cyan] {rel_path}")
                             result.updated.append(full_id)
-                            if local_id:
-                                await self._update_entity_id(entry_id, local_id, subtype, dry_run=True)  # type: ignore[arg-type]
+                            if local_id and entry_id:
+                                await self._update_entity_id(
+                                    entry_id, local_id, subtype, dry_run=True
+                                )
                             continue
 
                         await self._update_helper(entry_id, config)  # type: ignore[arg-type]

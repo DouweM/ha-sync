@@ -4,15 +4,12 @@ from pathlib import Path
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
-import pytest
 from typer.testing import CliRunner
 
-from ha_sync.cli import app
+from ha_sync.cli import _check_file_staleness, _record_file_states, app
 from ha_sync.sync.base import DiffItem
 
 from .conftest import MockSyncConfig, SampleAutomation, create_automation_file
-
-from ha_sync.cli import _record_file_states, _check_file_staleness
 
 runner = CliRunner()
 
@@ -82,7 +79,7 @@ class TestPushCommand:
             mock_get_syncers.return_value = [(mock_syncer, None)]
 
             # Run push with --yes to skip confirmation
-            result = runner.invoke(app, ["push", "--yes"])
+            runner.invoke(app, ["push", "--yes"])
 
             # Verify push was called with diff_items (not None)
             assert len(push_calls) == 1
@@ -127,7 +124,7 @@ class TestPushCommand:
             mock_ha_client_class.return_value.__aexit__ = AsyncMock()
             mock_get_syncers.return_value = [(mock_syncer, None)]
 
-            result = runner.invoke(app, ["push", "--dry-run"])
+            runner.invoke(app, ["push", "--dry-run"])
 
             # dry_run mode should pass dry_run=True to syncer
             assert len(push_calls) == 1
@@ -202,7 +199,7 @@ class TestInitCommand:
                 )
                 mock_get_config.return_value = mock_config
 
-                result = runner.invoke(app, ["init"])
+                runner.invoke(app, ["init"])
 
                 # Check directories exist
                 assert (temp_sync_dir / "automations").exists()
@@ -275,7 +272,9 @@ class TestDiffItemsConsistency:
             if diff_items:
                 push_received_ids.extend(item.entity_id for item in diff_items)
             from ha_sync.sync.base import SyncResult
-            return SyncResult(created=["auto_to_push"], updated=[], deleted=[], renamed=[], errors=[])
+            return SyncResult(
+                created=["auto_to_push"], updated=[], deleted=[], renamed=[], errors=[]
+            )
 
         mock_syncer = MagicMock()
         mock_syncer.entity_type = "automation"
@@ -290,7 +289,7 @@ class TestDiffItemsConsistency:
             mock_ha_client_class.return_value.__aexit__ = AsyncMock()
             mock_get_syncers.return_value = [(mock_syncer, None)]
 
-            result = runner.invoke(app, ["push", "--yes"])
+            runner.invoke(app, ["push", "--yes"])
 
             # Verify the same IDs flow through
             assert diff_computed_ids == push_received_ids, \

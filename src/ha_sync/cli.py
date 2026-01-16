@@ -1238,7 +1238,9 @@ def push(
 
         # Execute push with pre-computed diff_items to ensure consistency
         console.print()
-        asyncio.run(_push(config, paths, all_items, sync_deletions, dry_run=False, diff_items=diff_items))
+        asyncio.run(
+            _push(config, paths, all_items, sync_deletions, dry_run=False, diff_items=diff_items)
+        )
 
 
 async def _get_push_diff(

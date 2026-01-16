@@ -1,8 +1,6 @@
 """Tests for AutomationSyncer."""
 
 from pathlib import Path
-from typing import Any
-from unittest.mock import AsyncMock
 
 import pytest
 
@@ -10,7 +8,7 @@ from ha_sync.client import HAClient
 from ha_sync.sync.automations import AutomationSyncer
 from ha_sync.sync.base import DiffItem
 
-from .conftest import SampleAutomation, MockSyncConfig, create_automation_file
+from .conftest import MockSyncConfig, SampleAutomation, create_automation_file
 
 
 class TestAutomationSyncerDiff:
@@ -306,7 +304,7 @@ class TestAutomationSyncerPush:
         ]
 
         syncer = AutomationSyncer(mock_ha_client, sync_config)
-        result = await syncer.push(force=True, diff_items=diff_items)
+        await syncer.push(force=True, diff_items=diff_items)
 
         # Should have fetched remote (force mode rebuilds everything)
         mock_ha_client.get_automations.assert_called_once()

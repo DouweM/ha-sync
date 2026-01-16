@@ -1,13 +1,12 @@
 """Tests for ScriptSyncer (verifies SimpleEntitySyncer base class)."""
 
 from pathlib import Path
-from typing import Any
 
 import pytest
 
 from ha_sync.client import HAClient
-from ha_sync.sync.scripts import ScriptSyncer
 from ha_sync.sync.base import DiffItem
+from ha_sync.sync.scripts import ScriptSyncer
 
 from .conftest import MockSyncConfig, SampleScript, create_script_file
 

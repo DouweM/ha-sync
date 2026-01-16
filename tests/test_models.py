@@ -1,8 +1,8 @@
 """Tests for Pydantic models."""
 
 from ha_sync.models import (
-    Automation,
     HELPER_MODELS,
+    Automation,
     InputBoolean,
     InputNumber,
     Scene,

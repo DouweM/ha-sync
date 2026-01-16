@@ -1,7 +1,5 @@
 """Pytest fixtures for ha-sync tests."""
 
-import os
-import shutil
 from pathlib import Path
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock

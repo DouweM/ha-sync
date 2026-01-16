@@ -387,7 +387,9 @@ class AutomationSyncer(BaseSyncer):
         for auto_id, local_config in local.items():
             # Remove internal metadata for comparison
             local_clean = {k: v for k, v in local_config.items() if not k.startswith("_")}
-            filename = local_config.get("_filename", filename_from_name(local_config.get("alias", ""), auto_id))
+            filename = local_config.get(
+                "_filename", filename_from_name(local_config.get("alias", ""), auto_id)
+            )
             file_path = self.local_path / filename
             rel_path = relative_path(file_path)
 
