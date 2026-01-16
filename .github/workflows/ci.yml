@@ -3,6 +3,8 @@ name: CI
 on:
   push:
     branches: [main]
+    tags-ignore:
+      - "v*"
   pull_request:
     branches: [main]
 
@@ -19,7 +21,7 @@ jobs:
         run: uv python install
 
       - name: Install dependencies
-        run: uv sync --dev
+        run: uv sync --group dev
 
       - name: Run ruff check
         run: uv run ruff check
@@ -39,7 +41,7 @@ jobs:
         run: uv python install
 
       - name: Install dependencies
-        run: uv sync --dev
+        run: uv sync --group dev
 
       - name: Run pyright
         run: uv run pyright
@@ -56,7 +58,7 @@ jobs:
         run: uv python install
 
       - name: Install dependencies
-        run: uv sync --dev
+        run: uv sync --group dev
 
       - name: Run pytest
         run: uv run pytest
