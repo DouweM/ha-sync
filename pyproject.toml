@@ -3,8 +3,21 @@ name = "ha-sync"
 version = "0.1.0"
 description = "Sync Home Assistant UI config (dashboards, automations, helpers) to/from local YAML files"
 readme = "README.md"
+license = "MIT"
 authors = [
     { name = "Douwe Maan", email = "hi@douwe.me" }
+]
+keywords = ["home-assistant", "homeassistant", "yaml", "sync", "automation", "dashboard"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "Intended Audience :: End Users/Desktop",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Home Automation",
 ]
 requires-python = ">=3.13"
 dependencies = [
@@ -17,6 +30,11 @@ dependencies = [
     "rich>=13.9",
     "logfire[httpx]>=4.16.0",
 ]
+
+[project.urls]
+Homepage = "https://github.com/DouweM/ha-sync"
+Repository = "https://github.com/DouweM/ha-sync"
+Issues = "https://github.com/DouweM/ha-sync/issues"
 
 [project.optional-dependencies]
 dev = [

@@ -39,3 +39,13 @@ htmlcov/
 # OS
 .DS_Store
 Thumbs.db
+
+# Claude Code
+.claude/
+
+# ha-sync managed directories (user data)
+automations/
+scripts/
+scenes/
+dashboards/
+helpers/

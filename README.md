@@ -1,30 +1,52 @@
 # ha-sync
 
-Sync Home Assistant UI configuration (dashboards, automations, helpers, etc.) to/from local YAML files.
+Sync Home Assistant UI configuration to local YAML files and back.
+
+Manage your dashboards, automations, scripts, scenes, and helpers as code. Pull from Home Assistant, edit locally with your favorite editor or agent and push changes back.
 
 ## Features
 
 - **Bidirectional sync**: Pull from Home Assistant, push local changes back, or use `sync` for smart merging
 - **Git-aware**: Auto-stashes local changes before pull, restores after - safe to run anytime
-- **Multiple entity types**: Dashboards, automations, scripts, scenes, helpers, templates, groups
-- **Config entry helpers**: Utility meters, integrations, thresholds, generic thermostats, and more
-- **Diff view**: See exactly what changed between local and remote
+- **Diff view**: See exactly what changed between local and remote before syncing
 - **Validation**: Check YAML syntax and Jinja2 templates before pushing
+- **Multiple entity types**: Dashboards, automations, scripts, scenes, and all helper types
+
+### Supported Entity Types
+
+| Type | Description |
+|------|-------------|
+| Dashboards | Lovelace dashboards (split into view files) |
+| Automations | Automation rules |
+| Scripts | Script sequences |
+| Scenes | Scene configurations |
+| Helpers | Input helpers (boolean, number, select, text, datetime, button) |
+| Helpers | Timer, counter, schedule helpers |
+| Helpers | Template sensors, binary sensors, switches |
+| Helpers | Group sensors, binary sensors, lights |
+| Helpers | Utility meters, integrations, thresholds, time of day |
 
 ## Installation
 
 ```bash
-# Clone the repository
-git clone https://github.com/DouweM/ha-ui-yaml-sync.git
-cd ha-ui-yaml-sync
+# Install with uv (recommended)
+uv tool install ha-sync
 
-# Install dependencies with uv
+# Or with pip
+pip install ha-sync
+```
+
+### From source
+
+```bash
+git clone https://github.com/DouweM/ha-sync.git
+cd ha-sync
 uv sync
 ```
 
 ## Configuration
 
-Create a `.env` file in the project directory:
+Create a `.env` file in your sync directory:
 
 ```bash
 # Home Assistant URL
@@ -35,126 +57,118 @@ HA_URL=http://homeassistant.local:8123
 HA_TOKEN=your_token_here
 ```
 
+Or run the setup script:
+
+```bash
+./setup-env.sh
+```
+
+## Quick Start
+
+```bash
+# Initialize directory structure
+ha-sync init
+
+# Check connection
+ha-sync status
+
+# Pull everything from Home Assistant
+ha-sync pull
+
+# Make changes to your YAML files...
+
+# See what changed
+ha-sync diff
+
+# Push changes back
+ha-sync push
+```
+
 ## Usage
 
-### Initialize
+### sync (Recommended)
 
-Create the directory structure and verify configuration:
-
-```bash
-uv run ha-sync init
-```
-
-### Check Status
-
-View connection status and configuration:
+Bidirectional sync: pulls remote changes, merges with local changes, pushes the result.
 
 ```bash
-uv run ha-sync status
+# Sync everything
+ha-sync sync
+
+# Sync specific paths
+ha-sync sync automations/
+ha-sync sync automations/ scripts/
 ```
 
-### Sync (Recommended)
+The sync command:
+- Shows remote and local changes before doing anything
+- In git repos, stashes local changes, pulls, then restores
+- Detects merge conflicts and stops for manual resolution
+- Only asks for confirmation when pushing local changes
 
-Bidirectional sync that pulls remote changes, merges with local uncommitted changes, and pushes the result:
+### pull
+
+Pull entities from Home Assistant to local YAML files.
 
 ```bash
-# Sync all entity types
-uv run ha-sync sync
+ha-sync pull                      # Pull all
+ha-sync pull automations/         # Pull specific entity types
+ha-sync pull automations/turn-on-light.yaml # Pull a specific entity
 
-# Sync specific paths (one or more)
-uv run ha-sync sync automations/
-uv run ha-sync sync automations/ scripts/
+ha-sync pull --sync-deletions     # Delete local files not in HA
+ha-sync pull --dry-run            # Preview without changes
 ```
 
-If there are only remote changes, pulls without confirmation. If there are local changes to push, asks for confirmation. In a git repo, auto-stashes local changes before pull and restores after.
+### push
 
-### Pull
-
-Pull entities from Home Assistant to local YAML files:
+Push local YAML files to Home Assistant.
 
 ```bash
-# Pull all entity types
-uv run ha-sync pull
+ha-sync push                      # Push changed files
+ha-sync push automations/         # Push specific entity types
+ha-sync push automations/turn-on-light.yaml # Push a specific entity
+ha-sync push --all                # Push all files, not just changed
 
-# Pull specific paths (one or more)
-uv run ha-sync pull automations/
-uv run ha-sync pull automations/ dashboards/ helpers/
-
-# Delete local files not in Home Assistant
-uv run ha-sync pull --sync-deletions
+ha-sync push --sync-deletions     # Delete remote entities not locally
+ha-sync push --dry-run            # Preview without changes
 ```
 
-In a git repo, auto-stashes local changes in managed folders before pull and restores after - safe to run anytime.
+Always shows a preview and asks for confirmation.
 
-### Push
+### diff
 
-Push local YAML files to Home Assistant:
+Show differences between local and remote.
 
 ```bash
-# Push all entity types
-uv run ha-sync push
-
-# Push specific paths (one or more)
-uv run ha-sync push automations/
-uv run ha-sync push automations/my-auto.yaml scripts/my-script.yaml
-
-# Dry run (show what would change)
-uv run ha-sync push --dry-run
-
-# Push all items (not just changed)
-uv run ha-sync push --all
-
-# Delete remote entities not in local files
-uv run ha-sync push --sync-deletions
+ha-sync diff                      # Diff all
+ha-sync diff automations/         # Diff specific entity types
+ha-sync diff automations/turn-on-light.yaml # Diff a specific entity
 ```
 
-Always shows a preview and asks for confirmation before pushing.
+### validate
 
-### Diff
-
-Show differences between local and remote:
+Validate local YAML files.
 
 ```bash
-uv run ha-sync diff
-uv run ha-sync diff automations/
-uv run ha-sync diff automations/ helpers/template/
+ha-sync validate                  # Basic YAML validation
+ha-sync validate automations/         # Validate specific entity types
+ha-sync validate automations/turn-on-light.yaml # Validate a specific entity
+
+ha-sync validate --check-templates    # Also validate Jinja2 templates against HA
+ha-sync validate --check-config   # Check HA config validity
 ```
 
-### Validate
-
-Validate local YAML files:
+### Other Commands
 
 ```bash
-# Basic validation
-uv run ha-sync validate
-
-# Validate specific paths
-uv run ha-sync validate automations/ helpers/
-
-# Also validate Jinja2 templates against HA
-uv run ha-sync validate --check-templates
-
-# Check HA config validity
-uv run ha-sync validate --check-config
+ha-sync template "{{ states('sensor.temperature') }}"  # Test a template
+ha-sync search light              # Search for entities
+ha-sync state light.living_room   # Get entity state
+ha-sync status                    # Show connection status
 ```
-
-## Entity Types
-
-| Type | Description |
-|------|-------------|
-| `all` | All entity types (default) |
-| `dashboards` | Lovelace dashboards |
-| `automations` | Automation rules |
-| `scripts` | Script sequences |
-| `scenes` | Scene configurations |
-| `helpers` | Input helpers (boolean, number, select, text, datetime, button, timer, counter, schedule) |
-| `templates` | Template sensors, binary sensors, switches |
-| `groups` | Entity groups (binary sensors, sensors, lights, etc.) |
-| `config_helpers` | Config entry-based helpers (utility meters, integrations, thresholds, etc.) |
 
 ## Directory Structure
 
-After running `ha-sync init`, the following directory structure is created:
+After `ha-sync init`, your directory looks like:
 
 ```
 .
@@ -163,8 +177,8 @@ After running `ha-sync init`, the following directory structure is created:
 ├── scenes/                   # Scene YAML files
 ├── dashboards/               # Dashboard directories
 │   └── <dashboard-name>/     # Each dashboard gets a directory
-│       ├── _meta.yaml        # Dashboard metadata (title, icon, etc.)
-│       └── 00_<view-name>.yaml # View files (prefixed for ordering)
+│       ├── _meta.yaml        # Dashboard metadata
+│       └── 00_<view>.yaml    # View files (prefixed for ordering)
 └── helpers/                  # All helper entities
     ├── input_boolean/        # Input boolean helpers
     ├── input_number/         # Input number helpers
@@ -189,6 +203,41 @@ After running `ha-sync init`, the following directory structure is created:
     └── tod/                  # Time of Day helpers
 ```
 
+## Workflow Tips
+
+### Git Integration
+
+ha-sync works great with git. A typical workflow:
+
+```bash
+# Start fresh
+git checkout main
+git pull
+
+# Get latest from Home Assistant
+ha-sync pull
+git add -A && git commit -m "Pull from HA"
+
+# Make your changes...
+
+# Review and push
+ha-sync diff
+ha-sync push
+
+# Commit the final state
+git add -A && git commit -m "Update automations"
+```
+
+### Using sync for Day-to-Day
+
+The `sync` command handles the common case where you've made changes both locally and in the HA UI:
+
+```bash
+ha-sync sync
+```
+
+This pulls remote changes first, then pushes your local changes. If the same file was modified in both places, git's stash mechanism will detect the conflict.
+
 ## Development
 
 ```bash
@@ -208,4 +257,4 @@ uv run ruff format src/
 
 ## License
 
-MIT
+MIT - see [LICENSE](LICENSE) for details.
