@@ -59,11 +59,7 @@ class TestDashboardSyncerDiff:
             dir_name="test",
             title="Test Dashboard",
             url_path="dashboard-test",
-            views=[
-                SampleDashboard.create_view(
-                    path="home", title="Modified Home", position=1
-                )
-            ],
+            views=[SampleDashboard.create_view(path="home", title="Modified Home", position=1)],
         )
 
         # Remote has the dashboard with different content

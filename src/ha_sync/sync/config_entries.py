@@ -184,9 +184,7 @@ class ConfigEntrySyncer(BaseSyncer):
                 result[k] = v
         return result
 
-    async def _get_entity_registry_for_entry(
-        self, entry_id: str
-    ) -> list[dict[str, Any]]:
+    async def _get_entity_registry_for_entry(self, entry_id: str) -> list[dict[str, Any]]:
         """Get entity registry entries for a config entry (with caching)."""
         if self._entity_registry_cache is None:
             # Build cache on first access
@@ -215,9 +213,7 @@ class ConfigEntrySyncer(BaseSyncer):
                 config["name"] = entry.get("title", "")
 
                 # Fetch entity_id from entity registry
-                entity_entries = await self._get_entity_registry_for_entry(
-                    entry["entry_id"]
-                )
+                entity_entries = await self._get_entity_registry_for_entry(entry["entry_id"])
                 if len(entity_entries) == 1:
                     # Single entity - set the id field
                     config["id"] = entity_entries[0].get("entity_id")
@@ -270,9 +266,7 @@ class ConfigEntrySyncer(BaseSyncer):
             console.print(f"    [cyan]Would rename[/cyan] {current_id} -> {local_id}")
         else:
             try:
-                await self.client.update_entity_registry(
-                    current_id, new_entity_id=local_id
-                )
+                await self.client.update_entity_registry(current_id, new_entity_id=local_id)
                 console.print(f"    [blue]Renamed[/blue] {current_id} -> {local_id}")
                 self._invalidate_entity_registry_cache()
             except Exception as e:

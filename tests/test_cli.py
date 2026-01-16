@@ -42,13 +42,16 @@ class TestPushCommand:
             dry_run: bool = False,
             diff_items: list[DiffItem] | None = None,
         ):
-            push_calls.append({
-                "force": force,
-                "sync_deletions": sync_deletions,
-                "dry_run": dry_run,
-                "diff_items": diff_items,
-            })
+            push_calls.append(
+                {
+                    "force": force,
+                    "sync_deletions": sync_deletions,
+                    "dry_run": dry_run,
+                    "diff_items": diff_items,
+                }
+            )
             from ha_sync.sync.base import SyncResult
+
             return SyncResult(created=["test_auto"], updated=[], deleted=[], renamed=[], errors=[])
 
         async def mock_diff(remote=None):
@@ -70,9 +73,11 @@ class TestPushCommand:
 
         mock_client = MagicMock()
 
-        with patch("ha_sync.cli.get_config") as mock_get_config, \
-             patch("ha_sync.cli.HAClient") as mock_ha_client_class, \
-             patch("ha_sync.cli.get_syncers_for_paths") as mock_get_syncers:
+        with (
+            patch("ha_sync.cli.get_config") as mock_get_config,
+            patch("ha_sync.cli.HAClient") as mock_ha_client_class,
+            patch("ha_sync.cli.get_syncers_for_paths", new_callable=AsyncMock) as mock_get_syncers,
+        ):
             mock_get_config.return_value = sync_config
             mock_ha_client_class.return_value.__aenter__ = AsyncMock(return_value=mock_client)
             mock_ha_client_class.return_value.__aexit__ = AsyncMock()
@@ -110,15 +115,18 @@ class TestPushCommand:
         ):
             push_calls.append({"dry_run": dry_run})
             from ha_sync.sync.base import SyncResult
+
             return SyncResult(created=["test_auto"], updated=[], deleted=[], renamed=[], errors=[])
 
         mock_syncer = MagicMock()
         mock_syncer.entity_type = "automation"
         mock_syncer.push = mock_push
 
-        with patch("ha_sync.cli.get_config") as mock_get_config, \
-             patch("ha_sync.cli.HAClient") as mock_ha_client_class, \
-             patch("ha_sync.cli.get_syncers_for_paths") as mock_get_syncers:
+        with (
+            patch("ha_sync.cli.get_config") as mock_get_config,
+            patch("ha_sync.cli.HAClient") as mock_ha_client_class,
+            patch("ha_sync.cli.get_syncers_for_paths", new_callable=AsyncMock) as mock_get_syncers,
+        ):
             mock_get_config.return_value = sync_config
             mock_ha_client_class.return_value.__aenter__ = AsyncMock()
             mock_ha_client_class.return_value.__aexit__ = AsyncMock()
@@ -161,9 +169,11 @@ class TestDiffCommand:
         mock_syncer.entity_type = "automation"
         mock_syncer.diff = mock_diff
 
-        with patch("ha_sync.cli.get_config") as mock_get_config, \
-             patch("ha_sync.cli.HAClient") as mock_ha_client_class, \
-             patch("ha_sync.cli.get_syncers_for_paths") as mock_get_syncers:
+        with (
+            patch("ha_sync.cli.get_config") as mock_get_config,
+            patch("ha_sync.cli.HAClient") as mock_ha_client_class,
+            patch("ha_sync.cli.get_syncers_for_paths", new_callable=AsyncMock) as mock_get_syncers,
+        ):
             mock_get_config.return_value = sync_config
             mock_ha_client_class.return_value.__aenter__ = AsyncMock()
             mock_ha_client_class.return_value.__aexit__ = AsyncMock()
@@ -272,6 +282,7 @@ class TestDiffItemsConsistency:
             if diff_items:
                 push_received_ids.extend(item.entity_id for item in diff_items)
             from ha_sync.sync.base import SyncResult
+
             return SyncResult(
                 created=["auto_to_push"], updated=[], deleted=[], renamed=[], errors=[]
             )
@@ -281,9 +292,11 @@ class TestDiffItemsConsistency:
         mock_syncer.diff = mock_diff
         mock_syncer.push = mock_push
 
-        with patch("ha_sync.cli.get_config") as mock_get_config, \
-             patch("ha_sync.cli.HAClient") as mock_ha_client_class, \
-             patch("ha_sync.cli.get_syncers_for_paths") as mock_get_syncers:
+        with (
+            patch("ha_sync.cli.get_config") as mock_get_config,
+            patch("ha_sync.cli.HAClient") as mock_ha_client_class,
+            patch("ha_sync.cli.get_syncers_for_paths", new_callable=AsyncMock) as mock_get_syncers,
+        ):
             mock_get_config.return_value = sync_config
             mock_ha_client_class.return_value.__aenter__ = AsyncMock()
             mock_ha_client_class.return_value.__aexit__ = AsyncMock()
@@ -292,8 +305,9 @@ class TestDiffItemsConsistency:
             runner.invoke(app, ["push", "--yes"])
 
             # Verify the same IDs flow through
-            assert diff_computed_ids == push_received_ids, \
+            assert diff_computed_ids == push_received_ids, (
                 "Push should receive exactly the same diff_items that were computed for preview"
+            )
             assert "auto_to_push" in diff_computed_ids
 
 

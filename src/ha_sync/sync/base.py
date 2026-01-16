@@ -303,7 +303,8 @@ class SimpleEntitySyncer(BaseSyncer):
                 # Derive remote_ids from diff_items status
                 # Items with status modified, deleted, or renamed exist in remote
                 remote_ids = {
-                    item.entity_id for item in diff_items
+                    item.entity_id
+                    for item in diff_items
                     if item.status in ("modified", "deleted", "renamed")
                 }
                 remote = None  # Not fetched when using pre-computed diff
@@ -619,9 +620,7 @@ class ConfigEntryBasedSyncer(BaseSyncer):
 
     # Entity registry management (shared across all config entry-based helpers)
 
-    async def _get_entity_registry_for_entry(
-        self, entry_id: str
-    ) -> list[dict[str, Any]]:
+    async def _get_entity_registry_for_entry(self, entry_id: str) -> list[dict[str, Any]]:
         """Get entity registry entries for a config entry (with caching)."""
         if self._entity_registry_cache is None:
             all_entities = await self.client.get_entity_registry()
@@ -687,9 +686,7 @@ class ConfigEntryBasedSyncer(BaseSyncer):
             console.print(f"    [cyan]Would rename[/cyan] {current_id} -> {local_id}")
         else:
             try:
-                await self.client.update_entity_registry(
-                    current_id, new_entity_id=local_id
-                )
+                await self.client.update_entity_registry(current_id, new_entity_id=local_id)
                 console.print(f"    [blue]Renamed[/blue] {current_id} -> {local_id}")
                 self._invalidate_entity_registry_cache()
             except Exception as e:
