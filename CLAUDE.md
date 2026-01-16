@@ -13,3 +13,12 @@ Key commands (all accept multiple paths, e.g., `automations/ scripts/`):
 Don't run `ha-sync` in the current directory, always use a temp dir if you want to test something. NEVER use destructive commands (e.g. `sync`, `push`, `--all`, or `--sync-deletions`) without verification.
 
 Every command is instrumented and traces are sent to [Logfire](https://logfire.pydantic.dev/). The MCP server can help you see what happened in each run, including HTTP requests and responses.
+
+## Releasing
+
+To release a new version:
+1. Update `version` in `pyproject.toml`
+2. Commit the version bump
+3. Create and push a tag: `git tag v0.x.x && git push --tags`
+
+The release workflow will run CI, build, create a GitHub release, and publish to PyPI.
