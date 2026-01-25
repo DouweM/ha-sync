@@ -553,7 +553,9 @@ class ViewRenderer:
                     style = (
                         "green"
                         if rendered.lower() in ("home", "oasis")
-                        else "cyan" if rendered not in ("Away", "not_home") else "dim"
+                        else "cyan"
+                        if rendered not in ("Away", "not_home")
+                        else "dim"
                     )
                     text.append(rendered, style=style)
 
@@ -642,9 +644,7 @@ class ViewRenderer:
             return []
 
         template = (
-            "[{% for e in states."
-            + domain
-            + " %}"
+            "[{% for e in states." + domain + " %}"
             '{"entity_id": {{ e.entity_id | tojson }}, '
             '"state": {{ e.state | tojson }}, '
             '"name": {{ (e.name | default("")) | tojson }}, '
