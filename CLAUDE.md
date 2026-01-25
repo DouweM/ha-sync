@@ -9,6 +9,7 @@ Key commands (all accept multiple paths, e.g., `automations/ scripts/`):
 - `push [PATHS...]`: Push to HA. Always asks confirmation.
 - `diff [PATHS...]`: Show differences.
 - `validate [PATHS...] [-t]`: Validate YAML. Use `-t` to also validate templates against HA.
+- `render <VIEW_PATH> [-u USER]`: Render a dashboard view as CLI text. Use when asked to "show" or "render" a dashboard.
 
 Don't run `ha-sync` in the current directory, always use a temp dir if you want to test something. NEVER use destructive commands (e.g. `sync`, `push`, `--all`, or `--sync-deletions`) without verification.
 

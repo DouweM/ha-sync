@@ -1827,6 +1827,35 @@ def sync(
 
 
 @app.command()
+def render(
+    view_path: Annotated[
+        Path,
+        typer.Argument(help="Path to dashboard view YAML file"),
+    ],
+    user: Annotated[
+        str | None,
+        typer.Option("--user", "-u", help="View as specific user (e.g., douwe)"),
+    ] = None,
+) -> None:
+    """Render a Lovelace dashboard view as CLI text."""
+    with logfire.span("ha-sync render", view_path=str(view_path), user=user):
+        config = get_config()
+        if not config.url or not config.token:
+            console.print("[red]Missing HA_URL or HA_TOKEN.[/red] Set them in .env file.")
+            raise typer.Exit(1)
+
+        asyncio.run(_render(config, view_path, user))
+
+
+async def _render(config: SyncConfig, view_path: Path, user: str | None) -> None:
+    """Render a dashboard view."""
+    from ha_sync.render import render_view_file
+
+    async with HAClient(config.url, config.token) as client:
+        await render_view_file(client, view_path, user)
+
+
+@app.command()
 def version() -> None:
     """Show version information."""
     console.print(f"ha-sync version {__version__}")
