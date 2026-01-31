@@ -337,7 +337,8 @@ class SimpleEntitySyncer(BaseSyncer):
                     if not config:
                         continue
 
-                    push_config = self.clean_config(config)
+                    # Clean config and exclude 'id' - it's already in the URL path
+                    push_config = {k: v for k, v in self.clean_config(config).items() if k != "id"}
 
                     # Delete old and create new
                     await self.delete_remote(old_id)
@@ -369,7 +370,8 @@ class SimpleEntitySyncer(BaseSyncer):
 
             # Process creates and updates
             for entity_id, config in items_to_process:
-                push_config = self.clean_config(config)
+                # Clean config and exclude 'id' - it's already in the URL path
+                push_config = {k: v for k, v in self.clean_config(config).items() if k != "id"}
                 filename = config.get("_filename", self.get_filename(entity_id, config))
                 file_path = self.local_path / filename
                 rel_path = relative_path(file_path)

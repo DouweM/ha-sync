@@ -23,9 +23,25 @@ class NotConnected(Exception):
 __all__ = [
     "AuthenticationFailed",
     "ConnectionFailed",
+    "HAAPIError",
     "HAClient",
     "NotConnected",
 ]
+
+
+class HAAPIError(Exception):
+    """Home Assistant API error with response details."""
+
+    def __init__(self, response: httpx.Response) -> None:
+        self.response = response
+        self.status_code = response.status_code
+        # Try to extract HA's error message from JSON response
+        try:
+            data = response.json()
+            self.ha_message = data.get("message", response.text)
+        except Exception:
+            self.ha_message = response.text
+        super().__init__(self.ha_message)
 
 
 class HAClient:
@@ -103,6 +119,11 @@ class HAClient:
                 timeout=30.0,
             )
         return self._http_client
+
+    def _check_response(self, response: httpx.Response) -> None:
+        """Check response and raise HAAPIError with details if failed."""
+        if response.is_error:
+            raise HAAPIError(response)
 
     async def send_command(self, command_type: str, **kwargs: Any) -> Any:
         """Send a WebSocket command and return the result."""
@@ -230,7 +251,7 @@ class HAClient:
     async def get_automations(self) -> list[dict[str, Any]]:
         """Get all automations via REST API."""
         response = await self.http.get("/api/states")
-        response.raise_for_status()
+        self._check_response(response)
         states = response.json()
         return [s for s in states if s["entity_id"].startswith("automation.")]
 
@@ -240,7 +261,7 @@ class HAClient:
         response = await self.http.get(f"/api/config/automation/config/{automation_id}")
         if response.status_code == 404:
             return {}
-        response.raise_for_status()
+        self._check_response(response)
         return response.json()
 
     @logfire.instrument("Save automation config: {automation_id}")
@@ -250,13 +271,13 @@ class HAClient:
             f"/api/config/automation/config/{automation_id}",
             json=config,
         )
-        response.raise_for_status()
+        self._check_response(response)
 
     @logfire.instrument("Delete automation: {automation_id}")
     async def delete_automation(self, automation_id: str) -> None:
         """Delete an automation."""
         response = await self.http.delete(f"/api/config/automation/config/{automation_id}")
-        response.raise_for_status()
+        self._check_response(response)
 
     @logfire.instrument("Reload automations")
     async def reload_automations(self) -> None:
@@ -269,7 +290,7 @@ class HAClient:
     async def get_scripts(self) -> list[dict[str, Any]]:
         """Get all scripts via states."""
         response = await self.http.get("/api/states")
-        response.raise_for_status()
+        self._check_response(response)
         states = response.json()
         return [s for s in states if s["entity_id"].startswith("script.")]
 
@@ -279,7 +300,7 @@ class HAClient:
         response = await self.http.get(f"/api/config/script/config/{script_id}")
         if response.status_code == 404:
             return {}
-        response.raise_for_status()
+        self._check_response(response)
         return response.json()
 
     @logfire.instrument("Save script config: {script_id}")
@@ -289,13 +310,13 @@ class HAClient:
             f"/api/config/script/config/{script_id}",
             json=config,
         )
-        response.raise_for_status()
+        self._check_response(response)
 
     @logfire.instrument("Delete script: {script_id}")
     async def delete_script(self, script_id: str) -> None:
         """Delete a script."""
         response = await self.http.delete(f"/api/config/script/config/{script_id}")
-        response.raise_for_status()
+        self._check_response(response)
 
     @logfire.instrument("Reload scripts")
     async def reload_scripts(self) -> None:
@@ -308,7 +329,7 @@ class HAClient:
     async def get_scenes(self) -> list[dict[str, Any]]:
         """Get all scenes via states."""
         response = await self.http.get("/api/states")
-        response.raise_for_status()
+        self._check_response(response)
         states = response.json()
         return [s for s in states if s["entity_id"].startswith("scene.")]
 
@@ -318,7 +339,7 @@ class HAClient:
         response = await self.http.get(f"/api/config/scene/config/{scene_id}")
         if response.status_code == 404:
             return {}
-        response.raise_for_status()
+        self._check_response(response)
         return response.json()
 
     @logfire.instrument("Save scene config: {scene_id}")
@@ -328,13 +349,13 @@ class HAClient:
             f"/api/config/scene/config/{scene_id}",
             json=config,
         )
-        response.raise_for_status()
+        self._check_response(response)
 
     @logfire.instrument("Delete scene: {scene_id}")
     async def delete_scene(self, scene_id: str) -> None:
         """Delete a scene."""
         response = await self.http.delete(f"/api/config/scene/config/{scene_id}")
-        response.raise_for_status()
+        self._check_response(response)
 
     @logfire.instrument("Reload scenes")
     async def reload_scenes(self) -> None:
@@ -539,7 +560,7 @@ class HAClient:
             "/api/config/config_entries/options/flow",
             json={"handler": entry_id, "show_advanced_options": True},
         )
-        response.raise_for_status()
+        self._check_response(response)
         flow_data = response.json()
 
         # Extract configuration from data_schema suggested_values
@@ -575,7 +596,7 @@ class HAClient:
     async def delete_config_entry(self, entry_id: str) -> None:
         """Delete a config entry."""
         response = await self.http.delete(f"/api/config/config_entries/entry/{entry_id}")
-        response.raise_for_status()
+        self._check_response(response)
         self.invalidate_config_entries_cache()
 
     @logfire.instrument("Create config entry: {domain}")
@@ -600,7 +621,7 @@ class HAClient:
             "/api/config/config_entries/flow",
             json={"handler": domain, "show_advanced_options": True},
         )
-        response.raise_for_status()
+        self._check_response(response)
         flow_data = response.json()
         flow_id = flow_data["flow_id"]
 
@@ -611,7 +632,7 @@ class HAClient:
                     f"/api/config/config_entries/flow/{flow_id}",
                     json={"next_step_id": menu_step},
                 )
-                response.raise_for_status()
+                self._check_response(response)
                 flow_data = response.json()
 
             # Submit the form data
@@ -626,7 +647,7 @@ class HAClient:
                 f"/api/config/config_entries/flow/{flow_id}",
                 json=form_data,
             )
-            response.raise_for_status()
+            self._check_response(response)
             result = response.json()
 
             if result.get("type") == "create_entry":
@@ -660,7 +681,7 @@ class HAClient:
             "/api/config/config_entries/options/flow",
             json={"handler": entry_id, "show_advanced_options": True},
         )
-        response.raise_for_status()
+        self._check_response(response)
         flow_data = response.json()
         flow_id = flow_data["flow_id"]
 
@@ -678,7 +699,7 @@ class HAClient:
                 f"/api/config/config_entries/options/flow/{flow_id}",
                 json=form_data,
             )
-            response.raise_for_status()
+            self._check_response(response)
             result = response.json()
 
             if result.get("errors"):
@@ -947,7 +968,7 @@ class HAClient:
     async def get_all_states(self) -> list[dict[str, Any]]:
         """Get all entity states."""
         response = await self.http.get("/api/states")
-        response.raise_for_status()
+        self._check_response(response)
         return response.json()
 
     @logfire.instrument("Get entity state: {entity_id}")
@@ -956,21 +977,21 @@ class HAClient:
         response = await self.http.get(f"/api/states/{entity_id}")
         if response.status_code == 404:
             return None
-        response.raise_for_status()
+        self._check_response(response)
         return response.json()
 
     @logfire.instrument("Check HA config")
     async def check_config(self) -> dict[str, Any]:
         """Check Home Assistant configuration validity."""
         response = await self.http.post("/api/config/core/check_config")
-        response.raise_for_status()
+        self._check_response(response)
         return response.json()
 
     @logfire.instrument("Get HA config")
     async def get_config(self) -> dict[str, Any]:
         """Get Home Assistant configuration."""
         response = await self.http.get("/api/config")
-        response.raise_for_status()
+        self._check_response(response)
         return response.json()
 
     @logfire.instrument("Render template")
@@ -980,7 +1001,7 @@ class HAClient:
             "/api/template",
             json={"template": template},
         )
-        response.raise_for_status()
+        self._check_response(response)
         return response.text
 
     @logfire.instrument("Validate template")
