@@ -1,6 +1,6 @@
 [project]
 name = "ha-sync"
-version = "0.2.0"
+version = "0.2.1"
 description = "Sync Home Assistant UI config (dashboards, automations, helpers) to/from local YAML files"
 readme = "README.md"
 license = "MIT"
