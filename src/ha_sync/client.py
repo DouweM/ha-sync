@@ -371,9 +371,15 @@ class HAClient:
         return result if isinstance(result, list) else []
 
     @logfire.instrument("Create {helper_type}")
-    async def _create_helper(self, helper_type: str, config: dict[str, Any]) -> None:
-        """Create a helper."""
-        await self.send_command(f"{helper_type}/create", **config)
+    async def _create_helper(
+        self, helper_type: str, config: dict[str, Any]
+    ) -> dict[str, Any]:
+        """Create a helper and return the created item with its generated ID."""
+        # Strip 'id' from config - HA generates it from 'name', and including it
+        # would conflict with the WebSocket message id field
+        config_copy = {k: v for k, v in config.items() if k != "id"}
+        result = await self.send_command(f"{helper_type}/create", **config_copy)
+        return result if isinstance(result, dict) else {}
 
     @logfire.instrument("Update {helper_type}: {helper_id}")
     async def _update_helper(

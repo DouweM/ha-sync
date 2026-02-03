@@ -329,9 +329,28 @@ class HelperSyncer(BaseSyncer):
                     result.updated.append(full_id)
                     console.print(f"  [yellow]Updated[/yellow] {rel_path}")
                 else:
-                    await self._create_helper(helper_type, config)
-                    result.created.append(full_id)
+                    created_item = await self._create_helper(helper_type, config)
+                    generated_id = created_item.get("id", helper_id)
+                    new_full_id = f"{helper_type}/{generated_id}"
+                    result.created.append(new_full_id)
                     console.print(f"  [green]Created[/green] {rel_path}")
+
+                    # Update local file with generated ID if different
+                    if generated_id != helper_id:
+                        config["id"] = generated_id
+                        new_file_path = self._helper_path(helper_type) / filename_from_id(
+                            generated_id
+                        )
+                        dump_yaml(config, new_file_path)
+
+                        # Remove old file if it exists and is different
+                        if file_path.exists() and file_path != new_file_path:
+                            file_path.unlink()
+                            result.renamed.append((helper_id, generated_id))
+                            console.print(
+                                f"  [blue]Renamed[/blue] {rel_path} -> "
+                                f"{relative_path(new_file_path)}"
+                            )
 
             except Exception as e:
                 result.errors.append((full_id, str(e)))
