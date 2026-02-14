@@ -492,10 +492,7 @@ class ViewRenderer:
             try:
                 val = float(state)
                 # Show integers without decimal places
-                if val == int(val):
-                    state = str(int(val))
-                else:
-                    state = f"{val:.1f}"
+                state = str(int(val)) if val == int(val) else f"{val:.1f}"
             except ValueError:
                 pass
             if unit:

@@ -48,12 +48,15 @@ class HelperSyncer(BaseSyncer):
             return await method()
         return []
 
-    async def _create_helper(self, helper_type: str, config: dict[str, Any]) -> None:
+    async def _create_helper(
+        self, helper_type: str, config: dict[str, Any]
+    ) -> dict[str, Any] | None:
         """Create a helper in HA."""
         method_name = f"create_{helper_type}"
         method = getattr(self.client, method_name, None)
         if method:
-            await method(config)
+            return await method(config)
+        return None
 
     async def _update_helper(
         self, helper_type: str, helper_id: str, config: dict[str, Any]
@@ -330,7 +333,7 @@ class HelperSyncer(BaseSyncer):
                     console.print(f"  [yellow]Updated[/yellow] {rel_path}")
                 else:
                     created_item = await self._create_helper(helper_type, config)
-                    generated_id = created_item.get("id", helper_id)
+                    generated_id = created_item.get("id", helper_id) if created_item else helper_id
                     new_full_id = f"{helper_type}/{generated_id}"
                     result.created.append(new_full_id)
                     console.print(f"  [green]Created[/green] {rel_path}")

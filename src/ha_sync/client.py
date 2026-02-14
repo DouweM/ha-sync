@@ -400,8 +400,8 @@ class HAClient:
     async def get_input_booleans(self) -> list[dict[str, Any]]:
         return await self._get_helpers("input_boolean")
 
-    async def create_input_boolean(self, config: dict[str, Any]) -> None:
-        await self._create_helper("input_boolean", config)
+    async def create_input_boolean(self, config: dict[str, Any]) -> dict[str, Any]:
+        return await self._create_helper("input_boolean", config)
 
     async def update_input_boolean(self, helper_id: str, config: dict[str, Any]) -> None:
         await self._update_helper("input_boolean", helper_id, config)
@@ -413,8 +413,8 @@ class HAClient:
     async def get_input_numbers(self) -> list[dict[str, Any]]:
         return await self._get_helpers("input_number")
 
-    async def create_input_number(self, config: dict[str, Any]) -> None:
-        await self._create_helper("input_number", config)
+    async def create_input_number(self, config: dict[str, Any]) -> dict[str, Any]:
+        return await self._create_helper("input_number", config)
 
     async def update_input_number(self, helper_id: str, config: dict[str, Any]) -> None:
         await self._update_helper("input_number", helper_id, config)
@@ -426,8 +426,8 @@ class HAClient:
     async def get_input_selects(self) -> list[dict[str, Any]]:
         return await self._get_helpers("input_select")
 
-    async def create_input_select(self, config: dict[str, Any]) -> None:
-        await self._create_helper("input_select", config)
+    async def create_input_select(self, config: dict[str, Any]) -> dict[str, Any]:
+        return await self._create_helper("input_select", config)
 
     async def update_input_select(self, helper_id: str, config: dict[str, Any]) -> None:
         await self._update_helper("input_select", helper_id, config)
@@ -439,8 +439,8 @@ class HAClient:
     async def get_input_texts(self) -> list[dict[str, Any]]:
         return await self._get_helpers("input_text")
 
-    async def create_input_text(self, config: dict[str, Any]) -> None:
-        await self._create_helper("input_text", config)
+    async def create_input_text(self, config: dict[str, Any]) -> dict[str, Any]:
+        return await self._create_helper("input_text", config)
 
     async def update_input_text(self, helper_id: str, config: dict[str, Any]) -> None:
         await self._update_helper("input_text", helper_id, config)
@@ -452,8 +452,8 @@ class HAClient:
     async def get_input_datetimes(self) -> list[dict[str, Any]]:
         return await self._get_helpers("input_datetime")
 
-    async def create_input_datetime(self, config: dict[str, Any]) -> None:
-        await self._create_helper("input_datetime", config)
+    async def create_input_datetime(self, config: dict[str, Any]) -> dict[str, Any]:
+        return await self._create_helper("input_datetime", config)
 
     async def update_input_datetime(self, helper_id: str, config: dict[str, Any]) -> None:
         await self._update_helper("input_datetime", helper_id, config)
@@ -465,8 +465,8 @@ class HAClient:
     async def get_input_buttons(self) -> list[dict[str, Any]]:
         return await self._get_helpers("input_button")
 
-    async def create_input_button(self, config: dict[str, Any]) -> None:
-        await self._create_helper("input_button", config)
+    async def create_input_button(self, config: dict[str, Any]) -> dict[str, Any]:
+        return await self._create_helper("input_button", config)
 
     async def update_input_button(self, helper_id: str, config: dict[str, Any]) -> None:
         await self._update_helper("input_button", helper_id, config)
@@ -478,8 +478,8 @@ class HAClient:
     async def get_timers(self) -> list[dict[str, Any]]:
         return await self._get_helpers("timer")
 
-    async def create_timer(self, config: dict[str, Any]) -> None:
-        await self._create_helper("timer", config)
+    async def create_timer(self, config: dict[str, Any]) -> dict[str, Any]:
+        return await self._create_helper("timer", config)
 
     async def update_timer(self, helper_id: str, config: dict[str, Any]) -> None:
         await self._update_helper("timer", helper_id, config)
@@ -491,8 +491,8 @@ class HAClient:
     async def get_schedules(self) -> list[dict[str, Any]]:
         return await self._get_helpers("schedule")
 
-    async def create_schedule(self, config: dict[str, Any]) -> None:
-        await self._create_helper("schedule", config)
+    async def create_schedule(self, config: dict[str, Any]) -> dict[str, Any]:
+        return await self._create_helper("schedule", config)
 
     async def update_schedule(self, helper_id: str, config: dict[str, Any]) -> None:
         await self._update_helper("schedule", helper_id, config)
@@ -504,8 +504,8 @@ class HAClient:
     async def get_counters(self) -> list[dict[str, Any]]:
         return await self._get_helpers("counter")
 
-    async def create_counter(self, config: dict[str, Any]) -> None:
-        await self._create_helper("counter", config)
+    async def create_counter(self, config: dict[str, Any]) -> dict[str, Any]:
+        return await self._create_helper("counter", config)
 
     async def update_counter(self, helper_id: str, config: dict[str, Any]) -> None:
         await self._update_helper("counter", helper_id, config)
