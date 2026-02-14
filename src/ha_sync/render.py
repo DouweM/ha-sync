@@ -49,6 +49,7 @@ ICON_EMOJI = {
     "lock-smart": "🔐",
     "door": "🚪",
     "door-open": "🚪",
+    "garage-variant": "🚗",
     "garage-open-variant": "🚗",
     "cctv": "📹",
     "webcam": "📷",
@@ -64,6 +65,8 @@ ICON_EMOJI = {
     "speaker": "🔊",
     "hot-tub": "🛁",
     "fountain": "⛲",
+    "sun-wireless": "☀️",
+    "sun-wireless-outline": "☀️",
     "fishbowl": "🐟",
     "fishbowl-outline": "🐟",
     "glass-cocktail": "🍸",
@@ -488,7 +491,11 @@ class ViewRenderer:
             unit = self.get_attribute(entity_id, "unit_of_measurement")
             try:
                 val = float(state)
-                state = f"{val:.1f}"
+                # Show integers without decimal places
+                if val == int(val):
+                    state = str(int(val))
+                else:
+                    state = f"{val:.1f}"
             except ValueError:
                 pass
             if unit:
@@ -515,7 +522,7 @@ class ViewRenderer:
 
             state = self.get_state(entity_id)
             name = badge.get("name")
-            icon = badge.get("icon")
+            icon = badge.get("icon") or self.state_cache.get(entity_id, {}).get("icon", "")
             show_state = badge.get("show_state", True)
             state_content = badge.get("state_content")
 
