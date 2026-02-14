@@ -56,7 +56,7 @@ public actor AutoEntitiesResolver {
                 }
 
                 // Apply not-conditions
-                if let notFilter = rule.not, shouldExclude(entity: entity, notFilter: notFilter, templateService: templateService) {
+                if let notFilter = rule.not, try await shouldExclude(entity: entity, notFilter: notFilter) {
                     continue
                 }
 
@@ -94,17 +94,20 @@ public actor AutoEntitiesResolver {
 
     private func shouldExclude(
         entity: EntitySearchResult,
-        notFilter: AutoEntitiesNot,
-        templateService: TemplateService
-    ) -> Bool {
+        notFilter: AutoEntitiesNot
+    ) async throws -> Bool {
         guard let orConditions = notFilter.or else { return false }
 
         for condition in orConditions {
             if let requiredState = condition.state, entity.state == requiredState {
                 return true
             }
-            // Note: label-based exclusions require async and are handled separately
-            // For synchronous check, we skip label conditions here
+            if let label = condition.label {
+                let labelEntities = try await templateService.fetchEntitiesWithLabel(label)
+                if labelEntities.contains(entity.entityId) {
+                    return true
+                }
+            }
         }
         return false
     }

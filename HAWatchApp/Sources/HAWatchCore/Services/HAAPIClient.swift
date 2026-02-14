@@ -53,14 +53,19 @@ public actor HAAPIClient {
         let formatter = ISO8601DateFormatter()
         let startStr = formatter.string(from: start)
 
-        var components = URLComponents(url: baseURL.appendingPathComponent("api/history/period/\(startStr)"), resolvingAgainstBaseURL: false)!
+        guard var components = URLComponents(url: baseURL.appendingPathComponent("api/history/period/\(startStr)"), resolvingAgainstBaseURL: false) else {
+            throw HAAPIError.invalidURL("api/history/period/\(startStr)")
+        }
         components.queryItems = [
             URLQueryItem(name: "filter_entity_id", value: entityId),
             URLQueryItem(name: "end_time", value: formatter.string(from: end)),
             URLQueryItem(name: "minimal_response", value: "true"),
         ]
 
-        var request = URLRequest(url: components.url!)
+        guard let historyURL = components.url else {
+            throw HAAPIError.invalidURL(components.description)
+        }
+        var request = URLRequest(url: historyURL)
         request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
 
         let (data, response) = try await performRequest(request)
@@ -83,7 +88,10 @@ public actor HAAPIClient {
     public func fetchImage(path: String) async throws -> Data {
         let url: URL
         if path.hasPrefix("http") {
-            url = URL(string: path)!
+            guard let parsed = URL(string: path) else {
+                throw HAAPIError.invalidURL(path)
+            }
+            url = parsed
         } else {
             url = baseURL.appendingPathComponent(path)
         }
@@ -101,7 +109,7 @@ public actor HAAPIClient {
     /// Fetch dashboard configuration via WebSocket.
     /// Opens connection, authenticates, fetches config, then closes.
     public func fetchDashboardConfig(dashboardId: String? = nil) async throws -> DashboardConfig {
-        let wsURL = buildWebSocketURL()
+        let wsURL = try buildWebSocketURL()
         let messages = try await webSocketExchange(url: wsURL, dashboardId: dashboardId)
 
         guard let configData = messages.last,
@@ -121,7 +129,7 @@ public actor HAAPIClient {
 
     /// Fetch list of available dashboards via WebSocket.
     public func fetchDashboardList() async throws -> [DashboardListItem] {
-        let wsURL = buildWebSocketURL()
+        let wsURL = try buildWebSocketURL()
         let messages = try await webSocketExchange(url: wsURL, command: "lovelace/dashboards", params: [:])
 
         guard let responseData = messages.last,
@@ -168,7 +176,7 @@ public actor HAAPIClient {
         }
     }
 
-    private func buildWebSocketURL() -> URL {
+    private func buildWebSocketURL() throws -> URL {
         var urlString = baseURL.absoluteString
         if urlString.hasPrefix("https://") {
             urlString = "wss://" + urlString.dropFirst("https://".count)
@@ -177,7 +185,10 @@ public actor HAAPIClient {
         }
         if !urlString.hasSuffix("/") { urlString += "/" }
         urlString += "api/websocket"
-        return URL(string: urlString)!
+        guard let url = URL(string: urlString) else {
+            throw HAAPIError.invalidURL(urlString)
+        }
+        return url
     }
 
     private func webSocketExchange(
@@ -267,6 +278,7 @@ public enum HAAPIError: Error, Sendable {
     case httpError(statusCode: Int)
     case noDashboardConfig
     case webSocketUnavailable
+    case invalidURL(String)
     case unknownError
 }
 
