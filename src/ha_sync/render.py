@@ -473,8 +473,11 @@ class ViewRenderer:
         elif domain == "alarm_control_panel":
             state_map = {
                 "disarmed": ("Disarmed", "dim"),
-                "armed_home": ("Armed", "green"),
-                "armed_away": ("Armed", "green"),
+                "armed_home": ("Armed home", "green"),
+                "armed_away": ("Armed away", "green"),
+                "armed_night": ("Armed night", "green"),
+                "armed_vacation": ("Armed vacation", "green"),
+                "armed_custom_bypass": ("Armed custom", "green"),
                 "triggered": ("TRIGGERED", "bold red"),
             }
             return state_map.get(state, (state, None))
