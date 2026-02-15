@@ -40,6 +40,11 @@ htmlcov/
 .DS_Store
 Thumbs.db
 
+# Swift / Xcode
+HAWatchApp/.build/
+HAWatchApp/.swiftpm/
+HAWatchApp/HAWatchApp.xcodeproj/
+
 # Claude Code
 .claude/
 
