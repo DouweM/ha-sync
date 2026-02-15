@@ -49,16 +49,17 @@ struct HAWatchApp: App {
     private func handleDeepLink(_ url: URL) {
         guard url.scheme == "hawatch" else { return }
 
+        // In custom-scheme URLs, the first segment is the host (e.g. hawatch://dashboard/... → host = "dashboard")
         let pathComponents = url.pathComponents.filter { $0 != "/" }
 
-        if pathComponents.count >= 2, pathComponents[0] == "dashboard" {
-            deepLinkDashboardId = pathComponents[1]
-            if pathComponents.count >= 4, pathComponents[2] == "view" {
-                deepLinkViewPath = pathComponents[3]
+        if url.host == "dashboard", pathComponents.count >= 1 {
+            deepLinkDashboardId = pathComponents[0]
+            if pathComponents.count >= 3, pathComponents[1] == "view" {
+                deepLinkViewPath = pathComponents[2]
             } else {
                 deepLinkViewPath = nil
             }
-        } else if pathComponents.count >= 1, pathComponents[0] == "entity" {
+        } else if url.host == "entity" {
             // Entity deep link from complication — open default dashboard
             deepLinkDashboardId = nil
             deepLinkViewPath = nil
@@ -78,19 +79,9 @@ struct HAWatchApp: App {
 
     private func refreshComplicationData() async {
         let appSettings = SettingsManager.shared.appSettings
-        guard appSettings.isConfigured,
-              let baseURL = appSettings.baseURL else { return }
+        guard appSettings.isConfigured else { return }
 
-        let entityIds = appSettings.complicationEntities
-        guard !entityIds.isEmpty else { return }
-
-        let client = HAAPIClient(baseURL: baseURL, token: appSettings.accessToken)
-        let templateService = TemplateService(apiClient: client)
-
-        // Fetch latest states for complication entities
-        _ = try? await templateService.fetchEntityStates(entityIds: entityIds)
-
-        // Reload all complication timelines
+        // Reload all complication timelines — each timeline provider fetches its own data
         WidgetCenter.shared.reloadAllTimelines()
     }
     #endif

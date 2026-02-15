@@ -25,6 +25,7 @@ struct ViewRendererTests {
         ),
         "weather.home": EntityState(
             entityId: "weather.home", state: "sunny", name: "Home Weather",
+            unit: "°C",
             attributes: ["temperature": "21"]
         ),
         "person.john": EntityState(
@@ -314,7 +315,7 @@ struct ViewRendererTests {
 
         if case .card(.weather(let weather)) = result.sections[0].items[0] {
             #expect(weather.condition == "Sunny")
-            #expect(weather.temperature == "21")
+            #expect(weather.temperature == "21°C")
         } else {
             Issue.record("Expected weather card")
         }

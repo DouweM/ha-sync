@@ -72,6 +72,13 @@ targets:
         INFOPLIST_FILE: WatchApp/Widgets/Info.plist
         PRODUCT_NAME: HAWatchWidgets
         LD_RUNPATH_SEARCH_PATHS: "$(inherited) @executable_path/Frameworks @executable_path/../../Frameworks"
+    entitlements:
+      path: HAWatchWidgetExtension.entitlements
+      properties:
+        com.apple.security.application-groups:
+          - group.com.hawatch
+        keychain-access-groups:
+          - $(AppIdentifierPrefix)com.hawatch
 
   # ── iOS Companion App ────────────────────────────────────────
   HAWatchCompanion:

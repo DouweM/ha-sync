@@ -48,13 +48,23 @@ struct EntityComplicationProvider: AppIntentTimelineProvider {
         return Timeline(entries: [entry], policy: .after(nextUpdate))
     }
 
+    @MainActor
     func recommendations() -> [AppIntentRecommendation<EntityComplicationIntent>] {
-        [
-            AppIntentRecommendation(
-                intent: EntityComplicationIntent(),
-                description: "Entity State"
-            )
-        ]
+        let entities = SettingsManager.shared.appSettings.complicationEntities
+        guard !entities.isEmpty else {
+            return [
+                AppIntentRecommendation(
+                    intent: EntityComplicationIntent(),
+                    description: "Entity State"
+                )
+            ]
+        }
+
+        return entities.map { entityId in
+            let name = HAEntityQuery.nameFromId(entityId)
+            let intent = EntityComplicationIntent(entityId: entityId, entityName: name)
+            return AppIntentRecommendation(intent: intent, description: "\(name)")
+        }
     }
 
     // MARK: - Smart Stack Relevance

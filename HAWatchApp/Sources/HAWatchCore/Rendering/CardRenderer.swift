@@ -119,7 +119,9 @@ public struct CardRenderer: Sendable {
 
         let condition = entityState.state
         let iconName = iconMapper.weatherSymbolName(for: condition)
-        let temp = entityState.attributes["temperature"] ?? entityState.state
+        let rawTemp = entityState.attributes["temperature"] ?? ""
+        let tempUnit = entityState.unit.isEmpty ? "°C" : entityState.unit
+        let temp = stateFormatter.formatTemperature(rawValue: rawTemp, unit: tempUnit) ?? entityState.state
 
         let weather = RenderedWeather(
             entityId: entityId,

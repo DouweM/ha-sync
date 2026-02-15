@@ -132,31 +132,27 @@ final class DashboardViewModel {
         }
     }
 
-    /// Toggle a Home Assistant entity (light, switch, etc.)
+    /// Toggle a Home Assistant entity (light, switch, lock, cover, climate, etc.)
     func toggleEntity(entityId: String) async {
         guard let client = apiClient else { return }
 
         let domain = entityId.split(separator: ".").first.map(String.init) ?? ""
+        let resolver = ToggleServiceResolver.shared
 
-        // Domains that only support turn_on (no toggle)
+        // Script/scene don't need state — always turn_on
         let turnOnOnlyDomains: Set<String> = ["script", "scene"]
-        // Domains that support toggling
-        let toggleableDomains: Set<String> = [
-            "light", "switch", "fan", "input_boolean", "lock",
-            "cover", "climate", "automation"
-        ]
-
-        guard turnOnOnlyDomains.contains(domain) || toggleableDomains.contains(domain) else { return }
 
         do {
             if turnOnOnlyDomains.contains(domain) {
                 try await client.callService(domain: domain, service: "turn_on", entityId: entityId)
             } else {
-                // Check current state and toggle
+                // Fetch current state and resolve the correct service
                 let template = "{{ states('\(entityId)') }}"
                 let currentState = try await client.renderTemplate(template)
-                let service = currentState.trimmingCharacters(in: .whitespacesAndNewlines) == "on" ? "turn_off" : "turn_on"
-                try await client.callService(domain: domain, service: service, entityId: entityId)
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+
+                guard let resolved = resolver.resolveToggleService(domain: domain, currentState: currentState) else { return }
+                try await client.callService(domain: resolved.domain, service: resolved.service, entityId: entityId)
             }
 
             // Refresh the current view after toggling

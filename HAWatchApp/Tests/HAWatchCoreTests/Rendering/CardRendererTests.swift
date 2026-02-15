@@ -143,6 +143,7 @@ struct CardRendererTests {
             entityId: "weather.home",
             state: "partly_cloudy",
             name: "Home Weather",
+            unit: "°C",
             attributes: ["temperature": "18"]
         )
         let result = renderer.renderWeather(
@@ -154,7 +155,7 @@ struct CardRendererTests {
             return
         }
         #expect(weather.condition == "Partly Cloudy")
-        #expect(weather.temperature == "18")
+        #expect(weather.temperature == "18°C")
     }
 
     // MARK: - Camera card

@@ -44,7 +44,7 @@ public actor TemplateService {
 
         let lines = entityIds.map { entityId in
             """
-            \(entityId)|||{{ states("\(entityId)") }}|||{{ state_attr("\(entityId)", "friendly_name") | default("", true) | replace("\\n", " ") }}|||{{ state_attr("\(entityId)", "unit_of_measurement") | default("", true) }}|||{{ state_attr("\(entityId)", "icon") | default("", true) }}|||{{ state_attr("\(entityId)", "device_class") | default("", true) }}|||{{ state_attr("\(entityId)", "entity_picture") | default("", true) }}
+            \(entityId)|||{{ states("\(entityId)") }}|||{{ state_attr("\(entityId)", "friendly_name") | default("", true) | replace("\\n", " ") }}|||{{ state_attr("\(entityId)", "unit_of_measurement") | default("", true) }}|||{{ state_attr("\(entityId)", "icon") | default("", true) }}|||{{ state_attr("\(entityId)", "device_class") | default("", true) }}|||{{ state_attr("\(entityId)", "entity_picture") | default("", true) }}|||{{ state_attr("\(entityId)", "temperature") | default("", true) }}
             """
         }
 
@@ -66,10 +66,14 @@ public actor TemplateService {
             let icon = parts.count > 4 ? parts[4] : ""
             let deviceClass = parts.count > 5 ? parts[5] : ""
             let entityPicture = parts.count > 6 ? parts[6] : ""
+            let temperature = parts.count > 7 ? parts[7] : ""
 
             var attributes: [String: String] = [:]
             if !entityPicture.isEmpty {
                 attributes["entity_picture"] = entityPicture
+            }
+            if !temperature.isEmpty {
+                attributes["temperature"] = temperature
             }
 
             states[entityId] = EntityState(

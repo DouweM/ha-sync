@@ -39,16 +39,25 @@ struct ToggleEntityIntent: AppIntent, ControlConfigurationIntent {
         )
 
         let domain = entityId.split(separator: ".").first.map(String.init) ?? ""
+        let resolver = ToggleServiceResolver.shared
+
+        // Script/scene don't need state fetch
+        if domain == "script" || domain == "scene" {
+            try await client.callService(domain: domain, service: "turn_on", entityId: entityId)
+            return .result()
+        }
+
         let template = "{{ states('\(entityId)') }}"
         let currentState = try await client.renderTemplate(template)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
 
-        let service = currentState.trimmingCharacters(in: .whitespacesAndNewlines) == "on"
-            ? "turn_off"
-            : "turn_on"
+        guard let resolved = resolver.resolveToggleService(domain: domain, currentState: currentState) else {
+            return .result()
+        }
 
         try await client.callService(
-            domain: domain,
-            service: service,
+            domain: resolved.domain,
+            service: resolved.service,
             entityId: entityId
         )
 

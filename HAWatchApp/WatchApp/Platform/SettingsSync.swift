@@ -12,11 +12,22 @@ final class SettingsManager {
 
     private(set) var appSettings: AppSettings
 
-    private let defaults = UserDefaults.standard
+    private let defaults: UserDefaults
+    private static let suiteName = "group.com.hawatch"
     private let settingsKey = "appSettings"
 
     private init() {
-        if let data = UserDefaults.standard.data(forKey: "appSettings"),
+        let suite = UserDefaults(suiteName: Self.suiteName) ?? .standard
+        self.defaults = suite
+
+        // Migrate from UserDefaults.standard to shared suite if needed
+        if suite.data(forKey: "appSettings") == nil,
+           let standardData = UserDefaults.standard.data(forKey: "appSettings") {
+            suite.set(standardData, forKey: "appSettings")
+            UserDefaults.standard.removeObject(forKey: "appSettings")
+        }
+
+        if let data = suite.data(forKey: "appSettings"),
            let settings = try? JSONDecoder().decode(AppSettings.self, from: data) {
             self.appSettings = settings
 

@@ -184,4 +184,20 @@ public struct StateFormatter: Sendable {
         display = display.capitalized
         return FormattedState(text: display, color: .cyan)
     }
+
+    /// Format a temperature value for display (e.g. "21°C", "22.5°F").
+    /// - Parameters:
+    ///   - rawValue: The raw temperature string from the attribute
+    ///   - unit: The unit string (e.g. "°C", "°F")
+    /// - Returns: Formatted temperature string, or nil if rawValue is empty
+    public func formatTemperature(rawValue: String, unit: String = "°C") -> String? {
+        guard !rawValue.isEmpty else { return nil }
+        guard let val = Double(rawValue) else { return "\(rawValue)\(unit)" }
+
+        if val == Double(Int(val)) {
+            return "\(Int(val))\(unit)"
+        } else {
+            return "\(String(format: "%.1f", val))\(unit)"
+        }
+    }
 }
