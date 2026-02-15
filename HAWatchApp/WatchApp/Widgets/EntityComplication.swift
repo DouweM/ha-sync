@@ -2,12 +2,17 @@ import WidgetKit
 import SwiftUI
 import HAWatchCore
 
+// TODO: APNs push widget updates — requires a Home Assistant addon to send APNs
+// on state change. When implemented, add an APNs handler in HAWatchApp.swift
+// that calls WidgetCenter.shared.reloadTimelines(ofKind:) for relevant widgets.
+
 struct EntityComplicationEntry: TimelineEntry {
     let date: Date
     let entityName: String
     let stateText: String
     let iconName: String
     let stateColor: StateColor
+    let numericValue: Double?
 }
 
 struct EntityComplicationProvider: AppIntentTimelineProvider {
@@ -17,7 +22,8 @@ struct EntityComplicationProvider: AppIntentTimelineProvider {
             entityName: "Temperature",
             stateText: "23°C",
             iconName: "thermometer.medium",
-            stateColor: .primary
+            stateColor: .primary,
+            numericValue: 23.0
         )
     }
 
@@ -31,7 +37,8 @@ struct EntityComplicationProvider: AppIntentTimelineProvider {
             entityName: configuration.entityName ?? "Entity",
             stateText: "--",
             iconName: "circle.fill",
-            stateColor: .primary
+            stateColor: .primary,
+            numericValue: nil
         )
 
         let nextUpdate = Calendar.current.date(byAdding: .minute, value: 15, to: .now)!
@@ -45,6 +52,16 @@ struct EntityComplicationProvider: AppIntentTimelineProvider {
                 description: "Entity State"
             )
         ]
+    }
+
+    // MARK: - Smart Stack Relevance
+
+    /// Provide relevance hints for Smart Stack ordering.
+    /// Home automation entities are most relevant during morning/evening routines.
+    func relevances() async -> WidgetRelevances<EntityComplicationIntent> {
+        // TODO: Add location-based relevance (surface home entities when at home GPS coordinates)
+        // TODO: APNs push widget updates (requires HA addon to send push on state change)
+        return WidgetRelevances([])
     }
 
     @MainActor
@@ -74,12 +91,15 @@ struct EntityComplicationProvider: AppIntentTimelineProvider {
             deviceClass: entityState.deviceClass
         )
 
+        let numericValue = Double(entityState.state)
+
         return EntityComplicationEntry(
             date: .now,
             entityName: configuration.entityName ?? entityState.displayName,
             stateText: formatted.text,
             iconName: iconName,
-            stateColor: formatted.color
+            stateColor: formatted.color,
+            numericValue: numericValue
         )
     }
 }
@@ -128,6 +148,51 @@ struct InlineComplicationView: View {
     }
 }
 
+struct CornerComplicationView: View {
+    let entry: EntityComplicationEntry
+
+    var body: some View {
+        if let value = entry.numericValue {
+            // Gauge for numeric entities (temperature, battery, etc.)
+            Gauge(value: clampedValue(value), in: gaugeRange(value)) {
+                Image(systemName: entry.iconName)
+            } currentValueLabel: {
+                Text(entry.stateText)
+                    .font(.system(size: 11))
+            }
+            .gaugeStyle(.circular)
+            .widgetAccentable()
+            .widgetLabel(entry.entityName)
+        } else {
+            // Non-numeric: show icon + state text
+            VStack(spacing: 1) {
+                Image(systemName: entry.iconName)
+                    .font(.title3)
+                Text(entry.stateText)
+                    .font(.system(size: 11))
+            }
+            .widgetAccentable()
+            .widgetLabel(entry.entityName)
+        }
+    }
+
+    /// Clamp value within a reasonable gauge range
+    private func clampedValue(_ value: Double) -> Double {
+        min(max(value, gaugeRange(value).lowerBound), gaugeRange(value).upperBound)
+    }
+
+    /// Determine a sensible gauge range based on value magnitude
+    private func gaugeRange(_ value: Double) -> ClosedRange<Double> {
+        if value >= 0 && value <= 100 {
+            return 0...100  // Percentage-like (battery, humidity)
+        } else if value >= -40 && value <= 60 {
+            return -40...60  // Temperature-like
+        } else {
+            return 0...max(value * 1.5, 1)
+        }
+    }
+}
+
 // MARK: - Widget
 
 struct EntityComplicationWidget: Widget {
@@ -164,6 +229,8 @@ struct EntityComplicationEntryView: View {
             RectangularComplicationView(entry: entry)
         case .accessoryInline:
             InlineComplicationView(entry: entry)
+        case .accessoryCorner:
+            CornerComplicationView(entry: entry)
         default:
             CircularComplicationView(entry: entry)
         }

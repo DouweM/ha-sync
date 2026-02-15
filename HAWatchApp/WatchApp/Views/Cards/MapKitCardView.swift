@@ -4,6 +4,7 @@ import HAWatchCore
 
 struct MapKitCardView: View {
     let nativeMap: RenderedNativeMap
+    @Environment(SettingsManager.self) private var settings
     @State private var showFullScreen = false
 
     var body: some View {
@@ -22,15 +23,38 @@ struct MapKitCardView: View {
                         latitude: marker.latitude,
                         longitude: marker.longitude
                     )) {
-                        Circle()
-                            .fill(.blue)
-                            .frame(width: 12, height: 12)
-                            .overlay {
-                                Text(String(marker.name.prefix(1)))
-                                    .font(.system(size: 8, weight: .bold))
-                                    .foregroundStyle(.white)
-                            }
+                        if let pictureURL = marker.entityPictureURL,
+                           !pictureURL.isEmpty,
+                           let baseURL = settings.appSettings.baseURL {
+                            EntityPictureView(
+                                url: pictureURL,
+                                baseURL: baseURL,
+                                token: settings.appSettings.accessToken,
+                                size: 16
+                            )
+                        } else {
+                            Circle()
+                                .fill(.blue)
+                                .frame(width: 12, height: 12)
+                                .overlay {
+                                    Text(String(marker.name.prefix(1)))
+                                        .font(.system(size: 8, weight: .bold))
+                                        .foregroundStyle(.white)
+                                }
+                        }
                     }
+                }
+
+                ForEach(Array(nativeMap.zones.enumerated()), id: \.offset) { _, zone in
+                    MapCircle(
+                        center: CLLocationCoordinate2D(
+                            latitude: zone.latitude,
+                            longitude: zone.longitude
+                        ),
+                        radius: zone.radius
+                    )
+                    .foregroundStyle(.blue.opacity(0.15))
+                    .stroke(.blue.opacity(0.5), lineWidth: 1)
                 }
             }
             .mapStyle(nativeMap.useSatellite ? .imagery : .standard)
@@ -48,6 +72,7 @@ struct MapKitCardView: View {
 
 struct MapFullScreenView: View {
     let nativeMap: RenderedNativeMap
+    @Environment(SettingsManager.self) private var settings
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
@@ -63,14 +88,25 @@ struct MapFullScreenView: View {
                     latitude: marker.latitude,
                     longitude: marker.longitude
                 )) {
-                    Circle()
-                        .fill(.blue)
-                        .frame(width: 16, height: 16)
-                        .overlay {
-                            Text(String(marker.name.prefix(1)))
-                                .font(.system(size: 10, weight: .bold))
-                                .foregroundStyle(.white)
-                        }
+                    if let pictureURL = marker.entityPictureURL,
+                       !pictureURL.isEmpty,
+                       let baseURL = settings.appSettings.baseURL {
+                        EntityPictureView(
+                            url: pictureURL,
+                            baseURL: baseURL,
+                            token: settings.appSettings.accessToken,
+                            size: 16
+                        )
+                    } else {
+                        Circle()
+                            .fill(.blue)
+                            .frame(width: 16, height: 16)
+                            .overlay {
+                                Text(String(marker.name.prefix(1)))
+                                    .font(.system(size: 10, weight: .bold))
+                                    .foregroundStyle(.white)
+                            }
+                    }
                 }
             }
 

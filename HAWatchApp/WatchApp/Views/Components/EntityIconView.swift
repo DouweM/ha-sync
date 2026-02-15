@@ -11,5 +11,6 @@ struct EntityIconView: View {
             .font(size)
             .foregroundStyle(color ?? .accentColor)
             .symbolRenderingMode(.hierarchical)
+            .contentTransition(.symbolEffect(.replace))
     }
 }

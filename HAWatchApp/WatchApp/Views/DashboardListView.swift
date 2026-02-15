@@ -3,12 +3,25 @@ import HAWatchCore
 
 struct DashboardListView: View {
     @Environment(SettingsManager.self) private var settings
+    @Environment(\.deepLinkDashboardId) private var deepLinkDashboardId
+    @Environment(\.deepLinkViewPath) private var deepLinkViewPath
     @State private var viewModel = DashboardViewModel()
+    @State private var navigationPath = NavigationPath()
+
+    /// The dashboard ID to navigate to (from deep link or default setting)
+    private var targetDashboardId: String? {
+        deepLinkDashboardId ?? settings.appSettings.defaultDashboardId
+    }
+
+    /// The view path to navigate to (from deep link or default setting)
+    private var targetViewPath: String? {
+        deepLinkViewPath ?? settings.appSettings.defaultViewPath
+    }
 
     var body: some View {
-        NavigationStack {
+        NavigationStack(path: $navigationPath) {
             Group {
-                if viewModel.isLoading && viewModel.dashboards.isEmpty {
+                if viewModel.isLoading && viewModel.dashboards.isEmpty && viewModel.renderedViews.isEmpty {
                     ProgressView("Loading...")
                 } else if let error = viewModel.error {
                     VStack(spacing: 8) {
@@ -40,15 +53,36 @@ struct DashboardListView: View {
             .navigationDestination(for: DashboardListItem.self) { dashboard in
                 ViewPageView(viewModel: viewModel, dashboardId: dashboard.urlPath)
             }
+            .navigationDestination(for: String.self) { dashboardId in
+                ViewPageView(viewModel: viewModel, dashboardId: dashboardId)
+            }
         }
         .task {
             viewModel.configure(settings: settings.appSettings)
 
-            // If default dashboard is set, navigate directly
-            if let defaultId = settings.appSettings.defaultDashboardId {
-                await viewModel.loadDashboard(id: defaultId)
+            if let targetId = targetDashboardId {
+                // Load the target dashboard and auto-navigate
+                await viewModel.loadDashboard(id: targetId)
+                // Select the target view if specified
+                if let viewPath = targetViewPath {
+                    viewModel.selectView(byPath: viewPath)
+                }
+                // Push to the view page
+                navigationPath.append(targetId)
             } else {
                 await viewModel.loadDashboards()
+            }
+        }
+        .onChange(of: deepLinkDashboardId) { _, newId in
+            guard let newId else { return }
+            Task {
+                // Navigate to deep-linked dashboard
+                navigationPath = NavigationPath()
+                await viewModel.loadDashboard(id: newId)
+                if let viewPath = deepLinkViewPath {
+                    viewModel.selectView(byPath: viewPath)
+                }
+                navigationPath.append(newId)
             }
         }
     }

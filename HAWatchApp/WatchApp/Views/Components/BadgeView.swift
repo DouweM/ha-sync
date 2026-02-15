@@ -31,6 +31,6 @@ struct BadgeView: View {
         }
         .padding(.horizontal, 8)
         .padding(.vertical, 4)
-        .background(.ultraThinMaterial, in: Capsule())
+        .glassCapsuleBackground()
     }
 }

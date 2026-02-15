@@ -26,6 +26,6 @@ struct LogbookCardView: View {
         }
         .padding(.horizontal, 8)
         .padding(.vertical, 6)
-        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 12))
+        .glassCardBackground()
     }
 }

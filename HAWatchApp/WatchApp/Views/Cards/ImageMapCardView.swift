@@ -6,6 +6,7 @@ struct ImageMapCardView: View {
     @Environment(SettingsManager.self) private var settings
     @State private var imageData: Data?
     @State private var showFullScreen = false
+    @State private var loadFailed = false
 
     var body: some View {
         Button {
@@ -20,9 +21,22 @@ struct ImageMapCardView: View {
                             .resizable()
                             .scaledToFill()
                             .frame(width: geometry.size.width, height: geometry.size.height)
+                    } else if loadFailed {
+                        RoundedRectangle(cornerRadius: 8)
+                            .fill(.regularMaterial)
+                            .overlay {
+                                VStack(spacing: 4) {
+                                    Image(systemName: "map.fill")
+                                        .font(.title3)
+                                        .foregroundStyle(.secondary)
+                                    Text("Failed to load")
+                                        .font(.caption2)
+                                        .foregroundStyle(.secondary)
+                                }
+                            }
                     } else {
                         RoundedRectangle(cornerRadius: 8)
-                            .fill(.ultraThinMaterial)
+                            .fill(.regularMaterial)
                             .overlay {
                                 ProgressView()
                             }
@@ -74,9 +88,28 @@ struct ImageMapCardView: View {
     }
 
     private func loadImage() async {
-        guard let baseURL = settings.appSettings.baseURL else { return }
+        guard let baseURL = settings.appSettings.baseURL else {
+            loadFailed = true
+            return
+        }
         let client = HAAPIClient(baseURL: baseURL, token: settings.appSettings.accessToken)
-        imageData = try? await client.fetchImage(path: imageMap.imageURL)
+        do {
+            let result = try await withThrowingTaskGroup(of: Data.self) { group in
+                group.addTask {
+                    try await client.fetchImage(path: imageMap.imageURL)
+                }
+                group.addTask {
+                    try await Task.sleep(for: .seconds(10))
+                    throw CancellationError()
+                }
+                let data = try await group.next()!
+                group.cancelAll()
+                return data
+            }
+            imageData = result
+        } catch {
+            loadFailed = true
+        }
     }
 
     private func markerColor(_ name: String?) -> Color {

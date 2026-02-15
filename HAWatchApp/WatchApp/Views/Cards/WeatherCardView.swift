@@ -11,6 +11,7 @@ struct WeatherCardView: View {
                 Image(systemName: weather.iconName)
                     .font(.title2)
                     .symbolRenderingMode(.multicolor)
+                    .symbolEffect(.variableColor.iterative)
 
                 VStack(alignment: .leading) {
                     Text(weather.temperature)
@@ -49,6 +50,6 @@ struct WeatherCardView: View {
         }
         .padding(.horizontal, 8)
         .padding(.vertical, 6)
-        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 12))
+        .glassCardBackground()
     }
 }

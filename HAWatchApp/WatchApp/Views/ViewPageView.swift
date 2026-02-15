@@ -9,14 +9,31 @@ struct ViewPageView: View {
         Group {
             if viewModel.isLoading && viewModel.renderedViews.isEmpty {
                 ProgressView("Loading...")
+            } else if let error = viewModel.error, viewModel.renderedViews.isEmpty {
+                VStack(spacing: 8) {
+                    Image(systemName: "exclamationmark.triangle")
+                        .font(.title2)
+                        .foregroundStyle(.yellow)
+                    Text(error)
+                        .font(.caption)
+                        .multilineTextAlignment(.center)
+                    Button("Retry") {
+                        Task { await viewModel.loadDashboard(id: dashboardId) }
+                    }
+                }
             } else if viewModel.renderedViews.isEmpty {
                 Text("No views")
                     .foregroundStyle(.secondary)
             } else {
                 TabView(selection: $viewModel.selectedViewIndex) {
                     ForEach(Array(viewModel.renderedViews.enumerated()), id: \.offset) { index, renderedView in
-                        SingleViewPage(renderedView: renderedView)
+                        SingleViewPage(renderedView: renderedView, viewModel: viewModel)
                             .tag(index)
+                            .task(id: viewModel.staleViewIndices.contains(index)) {
+                                if viewModel.staleViewIndices.contains(index) {
+                                    await viewModel.refreshIfStale(viewIndex: index)
+                                }
+                            }
                     }
                 }
                 .tabViewStyle(.verticalPage)
@@ -37,6 +54,7 @@ struct ViewPageView: View {
 
 struct SingleViewPage: View {
     let renderedView: RenderedView
+    var viewModel: DashboardViewModel?
 
     var body: some View {
         ScrollView {
@@ -56,7 +74,7 @@ struct SingleViewPage: View {
 
                 // Sections
                 ForEach(Array(renderedView.sections.enumerated()), id: \.offset) { _, section in
-                    SectionView(section: section)
+                    SectionView(section: section, viewModel: viewModel)
                 }
             }
             .padding(.vertical, 4)
@@ -66,6 +84,7 @@ struct SingleViewPage: View {
 
 struct SectionView: View {
     let section: RenderedSection
+    var viewModel: DashboardViewModel?
 
     /// Group consecutive half-width cards into pairs for side-by-side rendering
     private var groupedItems: [SectionItemGroup] {
@@ -121,12 +140,12 @@ struct SectionView: View {
                     HeadingCardView(heading: heading)
 
                 case .singleCard(let card):
-                    CardFactory.makeView(for: card)
+                    CardFactory.makeView(for: card, viewModel: viewModel)
 
                 case .pairedCards(let left, let right):
                     HStack(spacing: 2) {
-                        CardFactory.makeView(for: left)
-                        CardFactory.makeView(for: right)
+                        CardFactory.makeView(for: left, viewModel: viewModel)
+                        CardFactory.makeView(for: right, viewModel: viewModel)
                     }
 
                 case .spacing:

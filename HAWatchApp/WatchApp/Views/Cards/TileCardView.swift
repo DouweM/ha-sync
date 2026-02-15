@@ -3,9 +3,39 @@ import HAWatchCore
 
 struct TileCardView: View {
     let tile: RenderedTile
+    var viewModel: DashboardViewModel?
     @Environment(SettingsManager.self) private var settings
+    @State private var isTapped = false
+
+    private var isToggleable: Bool {
+        let domain = tile.entityId.split(separator: ".").first.map(String.init) ?? ""
+        let toggleableDomains: Set<String> = [
+            "light", "switch", "fan", "input_boolean", "lock",
+            "cover", "climate", "script", "scene", "automation"
+        ]
+        return toggleableDomains.contains(domain)
+    }
 
     var body: some View {
+        if isToggleable {
+            Button {
+                #if canImport(WatchKit)
+                WKInterfaceDevice.current().play(.click)
+                #endif
+                isTapped.toggle()
+                Task {
+                    await viewModel?.toggleEntity(entityId: tile.entityId)
+                }
+            } label: {
+                tileContent
+            }
+            .buttonStyle(.plain)
+        } else {
+            tileContent
+        }
+    }
+
+    private var tileContent: some View {
         HStack(spacing: 8) {
             if let pictureURL = tile.entityPictureURL,
                !pictureURL.isEmpty,
@@ -21,6 +51,7 @@ struct TileCardView: View {
                     sfSymbolName: iconName,
                     color: tileIconColor
                 )
+                .symbolEffect(.bounce, value: isTapped)
             }
 
             VStack(alignment: .leading, spacing: 1) {
@@ -39,7 +70,7 @@ struct TileCardView: View {
         }
         .padding(.horizontal, 8)
         .padding(.vertical, 6)
-        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 12))
+        .glassCardBackground()
     }
 
     private var tileIconColor: Color? {

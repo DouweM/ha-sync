@@ -14,6 +14,7 @@ struct HeadingCardView: View {
                     .font(.caption)
                     .fontWeight(.bold)
                     .foregroundStyle(.secondary)
+                    .textCase(.uppercase)
             }
             .padding(.horizontal, 8)
 

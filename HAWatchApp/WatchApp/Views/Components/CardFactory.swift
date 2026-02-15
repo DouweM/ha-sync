@@ -3,13 +3,13 @@ import HAWatchCore
 
 enum CardFactory {
     @ViewBuilder
-    static func makeView(for card: RenderedCard) -> some View {
+    static func makeView(for card: RenderedCard, viewModel: DashboardViewModel? = nil) -> some View {
         switch card {
         case .tile(let tile):
-            TileCardView(tile: tile)
+            TileCardView(tile: tile, viewModel: viewModel)
 
         case .autoEntities(let autoEntities):
-            AutoEntitiesCardView(autoEntities: autoEntities)
+            AutoEntitiesCardView(autoEntities: autoEntities, viewModel: viewModel)
 
         case .logbook(let logbook):
             LogbookCardView(logbook: logbook)
