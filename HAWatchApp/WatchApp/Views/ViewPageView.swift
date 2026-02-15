@@ -67,15 +67,67 @@ struct SingleViewPage: View {
 struct SectionView: View {
     let section: RenderedSection
 
+    /// Group consecutive half-width cards into pairs for side-by-side rendering
+    private var groupedItems: [SectionItemGroup] {
+        var groups: [SectionItemGroup] = []
+        var pendingHalfCard: RenderedCard?
+
+        for item in section.items {
+            switch item {
+            case .heading(let heading):
+                if let pending = pendingHalfCard {
+                    groups.append(.singleCard(pending))
+                    pendingHalfCard = nil
+                }
+                groups.append(.heading(heading))
+
+            case .card(let card):
+                if card.isHalfWidth {
+                    if let first = pendingHalfCard {
+                        groups.append(.pairedCards(first, card))
+                        pendingHalfCard = nil
+                    } else {
+                        pendingHalfCard = card
+                    }
+                } else {
+                    if let pending = pendingHalfCard {
+                        groups.append(.singleCard(pending))
+                        pendingHalfCard = nil
+                    }
+                    groups.append(.singleCard(card))
+                }
+
+            case .spacing:
+                if let pending = pendingHalfCard {
+                    groups.append(.singleCard(pending))
+                    pendingHalfCard = nil
+                }
+                groups.append(.spacing)
+            }
+        }
+
+        if let pending = pendingHalfCard {
+            groups.append(.singleCard(pending))
+        }
+
+        return groups
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 2) {
-            ForEach(Array(section.items.enumerated()), id: \.offset) { _, item in
-                switch item {
+            ForEach(Array(groupedItems.enumerated()), id: \.offset) { _, group in
+                switch group {
                 case .heading(let heading):
                     HeadingCardView(heading: heading)
 
-                case .card(let card):
+                case .singleCard(let card):
                     CardFactory.makeView(for: card)
+
+                case .pairedCards(let left, let right):
+                    HStack(spacing: 2) {
+                        CardFactory.makeView(for: left)
+                        CardFactory.makeView(for: right)
+                    }
 
                 case .spacing:
                     Spacer()
@@ -84,6 +136,13 @@ struct SectionView: View {
             }
         }
     }
+}
+
+private enum SectionItemGroup {
+    case heading(RenderedHeading)
+    case singleCard(RenderedCard)
+    case pairedCards(RenderedCard, RenderedCard)
+    case spacing
 }
 
 // Safe array subscript

@@ -7,35 +7,38 @@ struct EntityPictureView: View {
     let token: String
     var size: CGFloat = 32
 
+    @State private var imageData: Data?
+    @State private var loadFailed = false
+
     var body: some View {
-        AsyncImage(url: resolvedURL) { phase in
-            switch phase {
-            case .success(let image):
-                image
+        Group {
+            if let imageData = imageData,
+               let uiImage = UIImage(data: imageData) {
+                Image(uiImage: uiImage)
                     .resizable()
                     .scaledToFill()
                     .frame(width: size, height: size)
                     .clipShape(Circle())
-
-            case .failure:
+            } else if loadFailed {
                 Image(systemName: "person.crop.circle.fill")
-                    .font(.title3)
+                    .font(size > 28 ? .title3 : .caption)
                     .foregroundStyle(.secondary)
-
-            case .empty:
+            } else {
                 ProgressView()
                     .frame(width: size, height: size)
-
-            @unknown default:
-                EmptyView()
             }
+        }
+        .task {
+            await loadImage()
         }
     }
 
-    private var resolvedURL: URL? {
-        if url.hasPrefix("http") {
-            return URL(string: url)
+    private func loadImage() async {
+        let client = HAAPIClient(baseURL: baseURL, token: token)
+        do {
+            imageData = try await client.fetchImage(path: url)
+        } catch {
+            loadFailed = true
         }
-        return baseURL.appendingPathComponent(url)
     }
 }

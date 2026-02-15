@@ -104,6 +104,25 @@ public actor HAAPIClient {
         return data
     }
 
+    /// Call a Home Assistant service via POST /api/services/{domain}/{service}.
+    public func callService(
+        domain: String,
+        service: String,
+        entityId: String
+    ) async throws {
+        let url = baseURL.appendingPathComponent("api/services/\(domain)/\(service)")
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+
+        let body: [String: Any] = ["entity_id": entityId]
+        request.httpBody = try JSONSerialization.data(withJSONObject: body)
+
+        let (_, response) = try await performRequest(request)
+        try validateResponse(response)
+    }
+
     // MARK: - WebSocket (transient, for dashboard config)
 
     /// Fetch dashboard configuration via WebSocket.
@@ -304,7 +323,7 @@ public struct HAHistoryEntry: Codable, Sendable {
     }
 }
 
-public struct DashboardListItem: Codable, Sendable {
+public struct DashboardListItem: Codable, Sendable, Hashable {
     public var id: String?
     public var urlPath: String?
     public var title: String?

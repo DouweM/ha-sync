@@ -17,7 +17,6 @@ struct ToggleEntityIntent: AppIntent {
     }
 
     func perform() async throws -> some IntentResult {
-        // Toggle via HA API
         guard let entityId = entityId,
               let baseURL = SettingsManager.shared.appSettings.baseURL
         else {
@@ -37,9 +36,10 @@ struct ToggleEntityIntent: AppIntent {
             ? "turn_off"
             : "turn_on"
 
-        // Call service via template (REST-only approach)
-        _ = try await client.renderTemplate(
-            "{{ states.\(domain).\(entityId.split(separator: ".").last ?? "") }}"
+        try await client.callService(
+            domain: domain,
+            service: service,
+            entityId: entityId
         )
 
         return .result()

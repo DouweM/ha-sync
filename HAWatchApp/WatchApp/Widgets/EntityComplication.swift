@@ -22,11 +22,11 @@ struct EntityComplicationProvider: AppIntentTimelineProvider {
     }
 
     func snapshot(for configuration: EntityComplicationIntent, in context: Context) async -> EntityComplicationEntry {
-        placeholder(in: context)
+        await fetchEntry(for: configuration) ?? placeholder(in: context)
     }
 
     func timeline(for configuration: EntityComplicationIntent, in context: Context) async -> Timeline<EntityComplicationEntry> {
-        let entry = EntityComplicationEntry(
+        let entry = await fetchEntry(for: configuration) ?? EntityComplicationEntry(
             date: .now,
             entityName: configuration.entityName ?? "Entity",
             stateText: "--",
@@ -34,7 +34,6 @@ struct EntityComplicationProvider: AppIntentTimelineProvider {
             stateColor: .primary
         )
 
-        // Refresh every 15 minutes
         let nextUpdate = Calendar.current.date(byAdding: .minute, value: 15, to: .now)!
         return Timeline(entries: [entry], policy: .after(nextUpdate))
     }
@@ -46,6 +45,42 @@ struct EntityComplicationProvider: AppIntentTimelineProvider {
                 description: "Entity State"
             )
         ]
+    }
+
+    @MainActor
+    private func fetchEntry(for configuration: EntityComplicationIntent) async -> EntityComplicationEntry? {
+        guard let entityId = configuration.entityId,
+              let baseURL = SettingsManager.shared.appSettings.baseURL
+        else { return nil }
+
+        let client = HAAPIClient(baseURL: baseURL, token: SettingsManager.shared.appSettings.accessToken)
+        let templateService = TemplateService(apiClient: client)
+
+        guard let states = try? await templateService.fetchEntityStates(entityIds: [entityId]),
+              let entityState = states[entityId]
+        else { return nil }
+
+        let stateFormatter = StateFormatter.shared
+        let iconMapper = IconMapper.shared
+        let formatted = stateFormatter.format(
+            entityId: entityId,
+            state: entityState.state,
+            deviceClass: entityState.deviceClass,
+            unit: entityState.unit
+        )
+        let iconName = iconMapper.sfSymbolName(
+            for: entityState.icon,
+            entityId: entityId,
+            deviceClass: entityState.deviceClass
+        )
+
+        return EntityComplicationEntry(
+            date: .now,
+            entityName: configuration.entityName ?? entityState.displayName,
+            stateText: formatted.text,
+            iconName: iconName,
+            stateColor: formatted.color
+        )
     }
 }
 
@@ -104,16 +139,7 @@ struct EntityComplicationWidget: Widget {
             intent: EntityComplicationIntent.self,
             provider: EntityComplicationProvider()
         ) { entry in
-            switch entry.widgetFamily {
-            case .accessoryCircular:
-                CircularComplicationView(entry: entry)
-            case .accessoryRectangular:
-                RectangularComplicationView(entry: entry)
-            case .accessoryInline:
-                InlineComplicationView(entry: entry)
-            default:
-                CircularComplicationView(entry: entry)
-            }
+            EntityComplicationEntryView(entry: entry)
         }
         .configurationDisplayName("Entity State")
         .description("Show a Home Assistant entity on your watch face.")
@@ -126,11 +152,20 @@ struct EntityComplicationWidget: Widget {
     }
 }
 
-// Widget entry view needs to read family from environment
-private extension EntityComplicationEntry {
-    @MainActor
-    var widgetFamily: WidgetFamily {
-        // This is a placeholder; actual family comes from the widget system
-        .accessoryCircular
+struct EntityComplicationEntryView: View {
+    @Environment(\.widgetFamily) var widgetFamily
+    let entry: EntityComplicationEntry
+
+    var body: some View {
+        switch widgetFamily {
+        case .accessoryCircular:
+            CircularComplicationView(entry: entry)
+        case .accessoryRectangular:
+            RectangularComplicationView(entry: entry)
+        case .accessoryInline:
+            InlineComplicationView(entry: entry)
+        default:
+            CircularComplicationView(entry: entry)
+        }
     }
 }

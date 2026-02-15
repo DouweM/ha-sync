@@ -3,10 +3,20 @@ import HAWatchCore
 
 struct TileCardView: View {
     let tile: RenderedTile
+    @Environment(SettingsManager.self) private var settings
 
     var body: some View {
         HStack(spacing: 8) {
-            if let iconName = tile.iconName {
+            if let pictureURL = tile.entityPictureURL,
+               !pictureURL.isEmpty,
+               let baseURL = settings.appSettings.baseURL {
+                EntityPictureView(
+                    url: pictureURL,
+                    baseURL: baseURL,
+                    token: settings.appSettings.accessToken,
+                    size: 28
+                )
+            } else if let iconName = tile.iconName {
                 EntityIconView(
                     sfSymbolName: iconName,
                     color: tile.state.color.isActive ? tile.state.color.swiftUIColor : nil

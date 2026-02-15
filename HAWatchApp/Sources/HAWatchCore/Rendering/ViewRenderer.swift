@@ -104,8 +104,8 @@ public actor ViewRenderer {
     ) async -> [RenderedBadge] {
         // Collect all mushroom badge templates for batch evaluation
         var templates: [String] = []
-        // Track which badge index maps to which template indices (content, label)
-        var badgeTemplateMap: [(badgeIndex: Int, contentIdx: Int?, labelIdx: Int?)] = []
+        // Track which badge index maps to which template indices (content, label, color)
+        var badgeTemplateMap: [(badgeIndex: Int, contentIdx: Int?, labelIdx: Int?, colorIdx: Int?)] = []
 
         for (i, badge) in badges.enumerated() {
             let badgeType = badge.type ?? "entity"
@@ -113,6 +113,7 @@ public actor ViewRenderer {
 
             var contentIdx: Int?
             var labelIdx: Int?
+            var colorIdx: Int?
             if let content = badge.content {
                 contentIdx = templates.count
                 templates.append(content)
@@ -121,18 +122,24 @@ public actor ViewRenderer {
                 labelIdx = templates.count
                 templates.append(label)
             }
-            badgeTemplateMap.append((badgeIndex: i, contentIdx: contentIdx, labelIdx: labelIdx))
+            // Color can also be a Jinja template
+            if let color = badge.color, color.contains("{") {
+                colorIdx = templates.count
+                templates.append(color)
+            }
+            badgeTemplateMap.append((badgeIndex: i, contentIdx: contentIdx, labelIdx: labelIdx, colorIdx: colorIdx))
         }
 
         // Batch evaluate all templates in a single API call
         let results = (try? await templateService.evaluateBatch(templates)) ?? Array(repeating: "", count: templates.count)
 
         // Build lookup from badge index to evaluated results
-        var mushroomResults: [Int: (content: String?, label: String?)] = [:]
+        var mushroomResults: [Int: (content: String?, label: String?, color: String?)] = [:]
         for entry in badgeTemplateMap {
             let content = entry.contentIdx.map { results[$0] }
             let label = entry.labelIdx.map { results[$0] }
-            mushroomResults[entry.badgeIndex] = (content, label)
+            let color = entry.colorIdx.map { results[$0] }
+            mushroomResults[entry.badgeIndex] = (content, label, color)
         }
 
         // Render all badges
@@ -142,8 +149,14 @@ public actor ViewRenderer {
 
             if badgeType == "custom:mushroom-template-badge" {
                 let templateResults = mushroomResults[i]
+                // If color was a template, update the badge with the evaluated result
+                var effectiveBadge = badge
+                if let evaluatedColor = templateResults?.color,
+                   !evaluatedColor.isEmpty {
+                    effectiveBadge.color = evaluatedColor
+                }
                 if let renderedBadge = badgeRenderer.renderMushroomBadge(
-                    badge: badge,
+                    badge: effectiveBadge,
                     contentResult: templateResults?.content,
                     labelResult: templateResults?.label,
                     stateProvider: stateProvider,
@@ -249,7 +262,7 @@ public actor ViewRenderer {
 
         // Collect mushroom badge templates for batch evaluation
         var templates: [String] = []
-        var badgeTemplateMap: [(badgeIndex: Int, contentIdx: Int?, labelIdx: Int?)] = []
+        var badgeTemplateMap: [(badgeIndex: Int, contentIdx: Int?, labelIdx: Int?, colorIdx: Int?)] = []
 
         for (i, badgeConfig) in badgeConfigs.enumerated() {
             let badgeType = badgeConfig.type ?? "entity"
@@ -257,6 +270,7 @@ public actor ViewRenderer {
 
             var contentIdx: Int?
             var labelIdx: Int?
+            var colorIdx: Int?
             if let content = badgeConfig.content {
                 contentIdx = templates.count
                 templates.append(content)
@@ -265,16 +279,21 @@ public actor ViewRenderer {
                 labelIdx = templates.count
                 templates.append(label)
             }
-            badgeTemplateMap.append((badgeIndex: i, contentIdx: contentIdx, labelIdx: labelIdx))
+            if let color = badgeConfig.color, color.contains("{") {
+                colorIdx = templates.count
+                templates.append(color)
+            }
+            badgeTemplateMap.append((badgeIndex: i, contentIdx: contentIdx, labelIdx: labelIdx, colorIdx: colorIdx))
         }
 
         let results = (try? await templateService.evaluateBatch(templates)) ?? Array(repeating: "", count: templates.count)
 
-        var mushroomResults: [Int: (content: String?, label: String?)] = [:]
+        var mushroomResults: [Int: (content: String?, label: String?, color: String?)] = [:]
         for entry in badgeTemplateMap {
             let content = entry.contentIdx.map { results[$0] }
             let label = entry.labelIdx.map { results[$0] }
-            mushroomResults[entry.badgeIndex] = (content, label)
+            let color = entry.colorIdx.map { results[$0] }
+            mushroomResults[entry.badgeIndex] = (content, label, color)
         }
 
         var badges: [RenderedBadge] = []
@@ -283,8 +302,13 @@ public actor ViewRenderer {
 
             if badgeType == "custom:mushroom-template-badge" {
                 let templateResults = mushroomResults[i]
+                var effectiveBadge = badgeConfig
+                if let evaluatedColor = templateResults?.color,
+                   !evaluatedColor.isEmpty {
+                    effectiveBadge.color = evaluatedColor
+                }
                 if let badge = badgeRenderer.renderMushroomBadge(
-                    badge: badgeConfig,
+                    badge: effectiveBadge,
                     contentResult: templateResults?.content,
                     labelResult: templateResults?.label,
                     stateProvider: stateProvider,
@@ -349,10 +373,10 @@ public actor ViewRenderer {
             return cardRenderer.renderCamera(card: card, stateProvider: stateProvider)
 
         case "weather-forecast":
-            return cardRenderer.renderWeather(card: card, stateProvider: stateProvider)
+            return await renderWeatherCard(card: card, stateProvider: stateProvider)
 
         case "history-graph":
-            return cardRenderer.renderHistoryGraph(card: card, stateProvider: stateProvider)
+            return await renderHistoryGraphCard(card: card, stateProvider: stateProvider)
 
         case "custom:map-card":
             return await renderMapCard(card: card, stateProvider: stateProvider)
@@ -452,6 +476,98 @@ public actor ViewRenderer {
         }
 
         return cardRenderer.renderLogbook(entries: logbookEntries)
+    }
+
+    // MARK: - Weather rendering
+
+    private func renderWeatherCard(
+        card: CardConfig,
+        stateProvider: (String) -> EntityState?
+    ) async -> RenderedCard? {
+        guard let entityId = card.entity else { return nil }
+        guard let entityState = stateProvider(entityId) else { return nil }
+
+        let condition = entityState.state
+        let iconName = iconMapper.weatherSymbolName(for: condition)
+        let temp = entityState.attributes["temperature"] ?? entityState.state
+
+        var forecastItems: [WeatherForecastItem] = []
+
+        if card.showForecast != false {
+            // Fetch forecast via template
+            let template = """
+            {% set forecast = state_attr('\(entityId)', 'forecast') or [] %}
+            [{% for f in forecast[:5] %}{"day": {{ f.datetime[:10] | tojson }}, "condition": {{ f.condition | tojson }}, "temp": {{ f.temperature | default(0) }}, "templow": {{ f.templow | default("") | tojson }}}{% if not loop.last %},{% endif %}{% endfor %}]
+            """
+            if let output = try? await templateService.evaluate(template),
+               let data = output.replacingOccurrences(of: "\n", with: "").data(using: .utf8),
+               let items = try? JSONDecoder().decode([WeatherForecastJSON].self, from: data) {
+                let dayFormatter = DateFormatter()
+                dayFormatter.dateFormat = "yyyy-MM-dd"
+                let shortFormatter = DateFormatter()
+                shortFormatter.dateFormat = "EEE"
+
+                for item in items {
+                    let dayLabel: String
+                    if let date = dayFormatter.date(from: item.day) {
+                        dayLabel = shortFormatter.string(from: date)
+                    } else {
+                        dayLabel = String(item.day.suffix(5))
+                    }
+
+                    forecastItems.append(WeatherForecastItem(
+                        day: dayLabel,
+                        iconName: iconMapper.weatherSymbolName(for: item.condition),
+                        tempHigh: "\(Int(item.temp))°",
+                        tempLow: item.templow.isEmpty ? nil : "\(item.templow)°"
+                    ))
+                }
+            }
+        }
+
+        return .weather(RenderedWeather(
+            entityId: entityId,
+            condition: condition.replacingOccurrences(of: "_", with: " ").capitalized,
+            temperature: temp,
+            iconName: iconName,
+            forecast: forecastItems
+        ))
+    }
+
+    // MARK: - History graph rendering
+
+    private func renderHistoryGraphCard(
+        card: CardConfig,
+        stateProvider: (String) -> EntityState?
+    ) async -> RenderedCard? {
+        guard let entityId = card.entity ?? card.entities?.first else { return nil }
+        let name = card.name ?? stateProvider(entityId)?.displayName ?? entityId
+        let hoursToShow = card.hoursToShow ?? 24
+
+        let end = Date()
+        let start = end.addingTimeInterval(-Double(hoursToShow) * 3600)
+
+        var dataPoints: [HistoryDataPoint] = []
+        if let history = try? await apiClient.fetchHistory(entityId: entityId, start: start, end: end),
+           let entries = history.first {
+            let formatter = ISO8601DateFormatter()
+            formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+            let fallbackFormatter = ISO8601DateFormatter()
+            fallbackFormatter.formatOptions = [.withInternetDateTime]
+
+            for entry in entries {
+                guard let value = Double(entry.state) else { continue }
+                let dateStr = entry.lastChanged ?? ""
+                guard let date = formatter.date(from: dateStr) ?? fallbackFormatter.date(from: dateStr) else { continue }
+                dataPoints.append(HistoryDataPoint(timestamp: date, value: value))
+            }
+        }
+
+        return .historyGraph(RenderedHistoryGraph(
+            entityId: entityId,
+            name: name,
+            dataPoints: dataPoints
+        ))
     }
 
     // MARK: - Map card rendering
@@ -681,4 +797,11 @@ private struct MapZoneJSON: Codable {
         case entityId = "entity_id"
         case name, icon, lat, lon, radius
     }
+}
+
+private struct WeatherForecastJSON: Codable {
+    var day: String
+    var condition: String
+    var temp: Double
+    var templow: String
 }

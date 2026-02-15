@@ -3,6 +3,8 @@ import HAWatchCore
 
 struct ImageMapCardView: View {
     let imageMap: RenderedImageMap
+    @Environment(SettingsManager.self) private var settings
+    @State private var imageData: Data?
     @State private var showFullScreen = false
 
     var body: some View {
@@ -11,9 +13,20 @@ struct ImageMapCardView: View {
         } label: {
             GeometryReader { geometry in
                 ZStack {
-                    // Background image (loaded via authenticated URL)
-                    RoundedRectangle(cornerRadius: 8)
-                        .fill(.ultraThinMaterial)
+                    // Background image
+                    if let imageData = imageData,
+                       let uiImage = UIImage(data: imageData) {
+                        Image(uiImage: uiImage)
+                            .resizable()
+                            .scaledToFill()
+                            .frame(width: geometry.size.width, height: geometry.size.height)
+                    } else {
+                        RoundedRectangle(cornerRadius: 8)
+                            .fill(.ultraThinMaterial)
+                            .overlay {
+                                ProgressView()
+                            }
+                    }
 
                     // Entity markers at normalized positions
                     ForEach(Array(imageMap.markers.enumerated()), id: \.offset) { _, marker in
@@ -52,9 +65,18 @@ struct ImageMapCardView: View {
             .padding(.horizontal, 8)
         }
         .buttonStyle(.plain)
-        .fullScreenCover(isPresented: $showFullScreen) {
-            ImageMapFullScreenView(imageMap: imageMap)
+        .task {
+            await loadImage()
         }
+        .fullScreenCover(isPresented: $showFullScreen) {
+            ImageMapFullScreenView(imageMap: imageMap, imageData: imageData)
+        }
+    }
+
+    private func loadImage() async {
+        guard let baseURL = settings.appSettings.baseURL else { return }
+        let client = HAAPIClient(baseURL: baseURL, token: settings.appSettings.accessToken)
+        imageData = try? await client.fetchImage(path: imageMap.imageURL)
     }
 
     private func markerColor(_ name: String?) -> Color {
@@ -73,14 +95,63 @@ struct ImageMapCardView: View {
 
 struct ImageMapFullScreenView: View {
     let imageMap: RenderedImageMap
+    let imageData: Data?
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
-        ZStack {
-            Color.black.ignoresSafeArea()
-            Text("Map")
-                .foregroundStyle(.secondary)
+        GeometryReader { geometry in
+            ZStack {
+                Color.black.ignoresSafeArea()
+
+                if let imageData = imageData,
+                   let uiImage = UIImage(data: imageData) {
+                    Image(uiImage: uiImage)
+                        .resizable()
+                        .scaledToFit()
+
+                    // Markers overlaid on the image
+                    ForEach(Array(imageMap.markers.enumerated()), id: \.offset) { _, marker in
+                        if let x = marker.normalizedX, let y = marker.normalizedY {
+                            Circle()
+                                .fill(markerColor(marker.colorName))
+                                .frame(width: CGFloat(marker.size ?? 28), height: CGFloat(marker.size ?? 28))
+                                .overlay {
+                                    Text(String(marker.name.prefix(1)))
+                                        .font(.system(size: 12, weight: .bold))
+                                        .foregroundStyle(.white)
+                                }
+                                .position(
+                                    x: x * geometry.size.width,
+                                    y: y * geometry.size.height
+                                )
+                        }
+                    }
+                } else {
+                    VStack {
+                        Image(systemName: "map.fill")
+                            .font(.largeTitle)
+                            .foregroundStyle(.secondary)
+                        Text("Image Map")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+            }
         }
+        .ignoresSafeArea()
         .onTapGesture { dismiss() }
+    }
+
+    private func markerColor(_ name: String?) -> Color {
+        switch name?.lowercased() {
+        case "red": return .red
+        case "blue": return .blue
+        case "green": return .green
+        case "yellow": return .yellow
+        case "orange": return .orange
+        case "purple": return .purple
+        case "pink": return .pink
+        default: return .accentColor
+        }
     }
 }

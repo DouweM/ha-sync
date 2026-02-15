@@ -64,13 +64,19 @@ public struct BadgeRenderer: Sendable {
         if let content = contentResult, !content.isEmpty {
             name = content
             let color: StateColor
-            let lower = content.lowercased()
-            if lower == "home" || lower == "oasis" {
-                color = .green
-            } else if lower == "away" || lower == "not_home" {
-                color = .dim
+            // Use explicit badge color if provided
+            if let badgeColor = badge.color?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased(),
+               !badgeColor.isEmpty {
+                color = stateColorFromString(badgeColor)
             } else {
-                color = .cyan
+                let lower = content.lowercased()
+                if lower == "home" || lower == "oasis" {
+                    color = .green
+                } else if lower == "away" || lower == "not_home" {
+                    color = .dim
+                } else {
+                    color = .cyan
+                }
             }
             state = FormattedState(text: content, color: color)
         }
@@ -89,6 +95,20 @@ public struct BadgeRenderer: Sendable {
             state: state,
             entityId: badge.entity
         )
+    }
+
+    private func stateColorFromString(_ color: String) -> StateColor {
+        switch color {
+        case "red": return .red
+        case "green": return .green
+        case "blue", "light-blue": return .blue
+        case "yellow", "amber": return .yellow
+        case "orange", "deep-orange": return .orange
+        case "cyan", "teal": return .cyan
+        case "purple", "pink": return .cyan
+        case "grey", "dark-grey", "blue-grey", "brown", "indigo": return .dim
+        default: return .cyan
+        }
     }
 
     private func renderPlainEntityBadge(

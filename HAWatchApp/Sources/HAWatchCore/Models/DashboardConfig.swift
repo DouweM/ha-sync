@@ -202,14 +202,19 @@ public struct BadgeConfig: Codable, Sendable {
     public var stateContent: String?
     public var visibility: [VisibilityCondition]?
 
+    public var showName: Bool?
+
     // mushroom-template-badge
     public var content: String?
     public var label: String?
+    public var color: String?
+    public var picture: String?
 
     enum CodingKeys: String, CodingKey {
-        case type, entity, name, icon, visibility, content, label
+        case type, entity, name, icon, visibility, content, label, color, picture
         case showState = "show_state"
         case showIcon = "show_icon"
+        case showName = "show_name"
         case stateContent = "state_content"
     }
 
@@ -220,10 +225,13 @@ public struct BadgeConfig: Codable, Sendable {
         icon: String? = nil,
         showState: Bool? = nil,
         showIcon: Bool? = nil,
+        showName: Bool? = nil,
         stateContent: String? = nil,
         visibility: [VisibilityCondition]? = nil,
         content: String? = nil,
-        label: String? = nil
+        label: String? = nil,
+        color: String? = nil,
+        picture: String? = nil
     ) {
         self.type = type
         self.entity = entity
@@ -231,10 +239,13 @@ public struct BadgeConfig: Codable, Sendable {
         self.icon = icon
         self.showState = showState
         self.showIcon = showIcon
+        self.showName = showName
         self.stateContent = stateContent
         self.visibility = visibility
         self.content = content
         self.label = label
+        self.color = color
+        self.picture = picture
     }
 }
 

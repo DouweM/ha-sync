@@ -3,6 +3,8 @@ import HAWatchCore
 
 struct CameraCardView: View {
     let camera: RenderedCamera
+    @Environment(SettingsManager.self) private var settings
+    @State private var snapshotData: Data?
     @State private var showFullScreen = false
 
     var body: some View {
@@ -10,16 +12,21 @@ struct CameraCardView: View {
             showFullScreen = true
         } label: {
             VStack(alignment: .leading, spacing: 4) {
-                // Camera snapshot placeholder
-                // In production, load via authenticated AsyncImage
-                RoundedRectangle(cornerRadius: 8)
-                    .fill(.ultraThinMaterial)
-                    .frame(height: 100)
-                    .overlay {
-                        Image(systemName: "video.fill")
-                            .font(.title3)
-                            .foregroundStyle(.secondary)
-                    }
+                if let snapshotData = snapshotData,
+                   let uiImage = UIImage(data: snapshotData) {
+                    Image(uiImage: uiImage)
+                        .resizable()
+                        .scaledToFill()
+                        .frame(height: 100)
+                        .clipShape(RoundedRectangle(cornerRadius: 8))
+                } else {
+                    RoundedRectangle(cornerRadius: 8)
+                        .fill(.ultraThinMaterial)
+                        .frame(height: 100)
+                        .overlay {
+                            ProgressView()
+                        }
+                }
 
                 Text(camera.name)
                     .font(.caption2)
@@ -28,34 +35,47 @@ struct CameraCardView: View {
             .padding(.horizontal, 8)
         }
         .buttonStyle(.plain)
-        .fullScreenCover(isPresented: $showFullScreen) {
-            CameraFullScreenView(camera: camera)
+        .task {
+            await loadSnapshot()
         }
+        .fullScreenCover(isPresented: $showFullScreen) {
+            CameraFullScreenView(camera: camera, snapshotData: snapshotData)
+        }
+    }
+
+    private func loadSnapshot() async {
+        guard let baseURL = settings.appSettings.baseURL else { return }
+        let client = HAAPIClient(baseURL: baseURL, token: settings.appSettings.accessToken)
+        snapshotData = try? await client.fetchCameraSnapshot(entityId: camera.entityId)
     }
 }
 
 struct CameraFullScreenView: View {
     let camera: RenderedCamera
+    let snapshotData: Data?
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
         ZStack {
             Color.black.ignoresSafeArea()
 
-            // Full-screen camera snapshot
-            RoundedRectangle(cornerRadius: 0)
-                .fill(.ultraThinMaterial)
-                .overlay {
-                    VStack {
-                        Image(systemName: "video.fill")
-                            .font(.largeTitle)
-                            .foregroundStyle(.secondary)
-                        Text(camera.name)
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
+            if let snapshotData = snapshotData,
+               let uiImage = UIImage(data: snapshotData) {
+                Image(uiImage: uiImage)
+                    .resizable()
+                    .scaledToFit()
+            } else {
+                VStack {
+                    Image(systemName: "video.fill")
+                        .font(.largeTitle)
+                        .foregroundStyle(.secondary)
+                    Text(camera.name)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                 }
+            }
         }
+        .ignoresSafeArea()
         .onTapGesture {
             dismiss()
         }
