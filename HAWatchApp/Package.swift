@@ -6,6 +6,8 @@ let package = Package(
     name: "HAWatchApp",
     platforms: [
         .macOS(.v14),
+        .iOS(.v16),
+        .watchOS(.v9),
     ],
     products: [
         .library(

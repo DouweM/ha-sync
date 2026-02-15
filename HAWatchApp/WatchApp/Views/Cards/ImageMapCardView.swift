@@ -14,8 +14,8 @@ struct ImageMapCardView: View {
             showFullScreen = true
         } label: {
             GeometryReader { geometry in
-                let focusOffsetX = imageMap.focusCenterX.map { (0.5 - $0) * geometry.size.width } ?? 0
-                let focusOffsetY = imageMap.focusCenterY.map { (0.5 - $0) * geometry.size.height } ?? 0
+                let focusOffsetX: CGFloat = imageMap.focusCenterX.map { (0.5 - $0) * geometry.size.width } ?? 0
+                let focusOffsetY: CGFloat = imageMap.focusCenterY.map { (0.5 - $0) * geometry.size.height } ?? 0
 
                 ZStack {
                     // Background image

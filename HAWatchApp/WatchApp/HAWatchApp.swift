@@ -1,5 +1,9 @@
 import SwiftUI
 import HAWatchCore
+#if os(watchOS)
+import WatchKit
+import WidgetKit
+#endif
 
 @main
 struct HAWatchApp: App {
@@ -10,10 +14,6 @@ struct HAWatchApp: App {
     init() {
         #if canImport(WatchConnectivity)
         WatchConnectivityManager.shared.activate()
-        #endif
-
-        #if os(watchOS)
-        scheduleBackgroundRefresh()
         #endif
     }
 
@@ -26,11 +26,16 @@ struct HAWatchApp: App {
                 .onOpenURL { url in
                     handleDeepLink(url)
                 }
+                #if os(watchOS)
+                .task {
+                    scheduleBackgroundRefresh()
+                }
+                #endif
         }
-
         #if os(watchOS)
-        WKBackgroundTask { task in
-            handleBackgroundTask(task)
+        .backgroundTask(.appRefresh) { _ in
+            await refreshComplicationData()
+            await scheduleBackgroundRefresh()
         }
         #endif
     }
@@ -71,20 +76,8 @@ struct HAWatchApp: App {
         ) { _ in }
     }
 
-    private func handleBackgroundTask(_ task: WKBackgroundTask) {
-        if let refreshTask = task as? WKApplicationRefreshBackgroundTask {
-            Task {
-                await refreshComplicationData()
-                refreshTask.setTaskCompletedWithSnapshot(false)
-                scheduleBackgroundRefresh()
-            }
-        } else {
-            task.setTaskCompletedWithSnapshot(false)
-        }
-    }
-
     private func refreshComplicationData() async {
-        let appSettings = await SettingsManager.shared.appSettings
+        let appSettings = SettingsManager.shared.appSettings
         guard appSettings.isConfigured,
               let baseURL = appSettings.baseURL else { return }
 

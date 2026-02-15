@@ -5,7 +5,7 @@ import HAWatchCore
 /// Manages WatchConnectivity session for settings transfer between iPhone and Watch.
 /// On watchOS: receives settings from iPhone.
 /// On iOS: sends settings to Watch.
-final class WatchConnectivityManager: NSObject, WCSessionDelegate {
+final class WatchConnectivityManager: NSObject, WCSessionDelegate, @unchecked Sendable {
     static let shared = WatchConnectivityManager()
 
     private override init() {
@@ -59,8 +59,9 @@ final class WatchConnectivityManager: NSObject, WCSessionDelegate {
     #endif
 
     func session(_ session: WCSession, didReceiveUserInfo userInfo: [String: Any] = [:]) {
+        nonisolated(unsafe) let info = userInfo
         Task { @MainActor in
-            SettingsManager.shared.applyReceivedSettings(userInfo)
+            SettingsManager.shared.applyReceivedSettings(info)
         }
     }
 }
