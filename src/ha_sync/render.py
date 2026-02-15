@@ -27,6 +27,8 @@ ICON_EMOJI = {
     "baby-face-outline": "👶",
     "desktop-tower-monitor": "🖥️",
     "sofa": "🛋️",
+    "briefcase": "💼",
+    "weight-lifter": "🏋️",
     "stove": "🍳",
     "tree": "🌳",
     "flower": "🌸",
@@ -74,6 +76,7 @@ ICON_EMOJI = {
     "wifi": "📶",
     "airplane": "✈️",
     "looks": "✨",
+    "lamp": "💡",
     "led-strip": "💡",
     "led-strip-variant": "💡",
     "power-plug-battery": "🔋",
@@ -172,7 +175,7 @@ DOMAIN_EMOJI = {
     "fan": "🌀",
     "climate": "🌡️",
     "lock": "🔒",
-    "cover": "🚪",
+    "cover": "🪟",
     "sensor": "📊",
     "binary_sensor": "⚡",
     "camera": "📹",
@@ -409,6 +412,14 @@ class ViewRenderer:
         for key, emoji in ICON_EMOJI.items():
             if key in icon_name:
                 return emoji
+
+        # Unrecognized icon — fall back to domain/device_class
+        if entity_id:
+            device_class = self.state_cache.get(entity_id, {}).get("device_class", "")
+            if device_class and device_class in DEVICE_CLASS_EMOJI:
+                return DEVICE_CLASS_EMOJI[device_class]
+            domain = entity_id.split(".")[0]
+            return DOMAIN_EMOJI.get(domain, "•")
 
         return "•"
 

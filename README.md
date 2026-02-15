@@ -157,6 +157,42 @@ ha-sync validate --check-templates    # Also validate Jinja2 templates against H
 ha-sync validate --check-config   # Check HA config validity
 ```
 
+### render
+
+Render a dashboard view as a text preview in the terminal with the actual states
+of your entities.
+
+```bash
+ha-sync render dashboards/home/00_main.yaml        # Render a view
+ha-sync render dashboards/home/00_main.yaml -u bob # Render as a specific user
+```
+
+```
+═══ • MAIN ═══
+  📊 Printer Black toner remaining: 93%
+
+🌡️ CLIMATE
+  🌡️ Downstairs: Cooling
+  🏋️ Gym: Off
+
+💼 OFFICE
+  💨 Carbon Dioxide: 556ppm
+  💡 Lights: Off
+  🔊 Sonos: paused
+
+🛏️ BEDROOM
+  🌀 Fan: On
+  🪟 Balcony shade: Open
+  🪟 Bathroom shade: Closed
+
+🛡️ SECURITY
+  🛡️ Alarm: Armed away
+
+🏠 HOME
+  👥 Bob: Away
+  ✈️ Traveling: On
+```
+
 ### Other Commands
 
 ```bash
