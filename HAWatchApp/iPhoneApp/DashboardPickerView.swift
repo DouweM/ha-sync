@@ -4,10 +4,17 @@ import HAWatchCore
 struct DashboardPickerView: View {
     let serverURL: String
     let accessToken: String
+    let onSelect: ((String?) -> Void)?
 
     @State private var dashboards: [DashboardListItem] = []
     @State private var selectedId: String?
     @State private var isLoading = false
+
+    init(serverURL: String, accessToken: String, onSelect: ((String?) -> Void)? = nil) {
+        self.serverURL = serverURL
+        self.accessToken = accessToken
+        self.onSelect = onSelect
+    }
 
     var body: some View {
         List {
@@ -17,7 +24,7 @@ struct DashboardPickerView: View {
                 ForEach(dashboards, id: \.urlPath) { dashboard in
                     Button {
                         selectedId = dashboard.urlPath
-                        // Save as default and sync to watch
+                        onSelect?(dashboard.urlPath)
                     } label: {
                         HStack {
                             if let icon = dashboard.icon {
@@ -54,6 +61,9 @@ struct DashboardPickerView: View {
 
         let client = HAAPIClient(baseURL: url, token: accessToken)
         dashboards = (try? await client.fetchDashboardList()) ?? []
+
+        // Load current selection from settings
+        selectedId = SettingsManager.shared.appSettings.defaultDashboardId
 
         isLoading = false
     }

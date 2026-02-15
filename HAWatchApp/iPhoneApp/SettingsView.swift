@@ -54,7 +54,9 @@ struct iPhoneSettingsView: View {
                             DashboardPickerView(
                                 serverURL: serverURL,
                                 accessToken: accessToken
-                            )
+                            ) { dashboardId in
+                                SettingsManager.shared.updateDefaultDashboard(id: dashboardId)
+                            }
                         }
                     }
 
@@ -63,7 +65,9 @@ struct iPhoneSettingsView: View {
                             ComplicationConfigView(
                                 serverURL: serverURL,
                                 accessToken: accessToken
-                            )
+                            ) { entities in
+                                SettingsManager.shared.updateComplicationEntities(entities)
+                            }
                         }
                     }
                 }
@@ -90,7 +94,14 @@ struct iPhoneSettingsView: View {
             validationResult = "Connected to \(config.locationName ?? "Home Assistant") (v\(config.version ?? "?"))"
 
             // Send settings to Watch via WatchConnectivity
-            // WCSession.default.sendMessage(...)
+            let settings = AppSettings(
+                serverURL: serverURL,
+                accessToken: accessToken
+            )
+            SettingsManager.shared.save(settings)
+            #if canImport(WatchConnectivity)
+            WatchConnectivityManager.shared.sendSettings(settings)
+            #endif
         } catch {
             validationResult = "Connection failed: \(error.localizedDescription)"
         }

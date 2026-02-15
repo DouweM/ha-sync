@@ -4,11 +4,18 @@ import HAWatchCore
 struct ComplicationConfigView: View {
     let serverURL: String
     let accessToken: String
+    let onUpdate: (([String]) -> Void)?
 
     @State private var entities: [EntitySearchResult] = []
     @State private var isLoading = false
     @State private var searchText = ""
     @State private var selectedEntities: Set<String> = []
+
+    init(serverURL: String, accessToken: String, onUpdate: (([String]) -> Void)? = nil) {
+        self.serverURL = serverURL
+        self.accessToken = accessToken
+        self.onUpdate = onUpdate
+    }
 
     var filteredEntities: [EntitySearchResult] {
         if searchText.isEmpty { return entities }
@@ -67,11 +74,15 @@ struct ComplicationConfigView: View {
         } else {
             selectedEntities.insert(entityId)
         }
+        onUpdate?(Array(selectedEntities).sorted())
     }
 
     private func loadEntities() async {
         guard let url = URL(string: serverURL) else { return }
         isLoading = true
+
+        // Load current selections from settings
+        selectedEntities = Set(SettingsManager.shared.appSettings.complicationEntities)
 
         let client = HAAPIClient(baseURL: url, token: accessToken)
         let templateService = TemplateService(apiClient: client)
