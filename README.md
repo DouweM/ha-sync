@@ -57,7 +57,7 @@ HA_URL=http://homeassistant.local:8123
 HA_TOKEN=your_token_here
 ```
 
-Or run the setup script:
+If you installed from source, you can also use the included setup script:
 
 ```bash
 ./setup-env.sh
