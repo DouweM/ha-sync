@@ -7,6 +7,7 @@ struct EntityPictureView: View {
     let token: String
     var size: CGFloat = 32
 
+    @Environment(\.apiClient) private var sharedAPIClient
     @State private var imageData: Data?
     @State private var loadFailed = false
 
@@ -34,9 +35,9 @@ struct EntityPictureView: View {
     }
 
     private func loadImage() async {
-        let client = HAAPIClient(baseURL: baseURL, token: token)
+        let client = sharedAPIClient ?? HAAPIClient(baseURL: baseURL, token: token)
         do {
-            imageData = try await client.fetchImage(path: url)
+            imageData = try await ImageCache.shared.fetchImage(path: url, using: client)
         } catch {
             loadFailed = true
         }

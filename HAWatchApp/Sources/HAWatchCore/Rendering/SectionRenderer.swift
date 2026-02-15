@@ -130,7 +130,7 @@ public struct SectionRenderer: Sendable {
         }
 
         return RenderedHeading(
-            text: text.uppercased(),
+            text: text,
             iconName: iconName,
             badges: badges
         )

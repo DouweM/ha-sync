@@ -180,9 +180,9 @@ struct ViewRendererTests {
         #expect(items.count == 6)
 
         if case .heading(let h) = items[1] {
-            #expect(h.text == "LIGHTS")
+            #expect(h.text == "Lights")
         } else {
-            Issue.record("Expected .heading for LIGHTS")
+            Issue.record("Expected .heading for Lights")
         }
 
         if case .card(.tile(let tile)) = items[2] {
@@ -192,9 +192,9 @@ struct ViewRendererTests {
         }
 
         if case .heading(let h) = items[4] {
-            #expect(h.text == "CLIMATE")
+            #expect(h.text == "Climate")
         } else {
-            Issue.record("Expected .heading for CLIMATE")
+            Issue.record("Expected .heading for Climate")
         }
 
         if case .card(.tile(let tile)) = items[5] {
@@ -290,7 +290,7 @@ struct ViewRendererTests {
         #expect(items.count == 2)
 
         if case .heading(let h) = items[1] {
-            #expect(h.text == "ALARM")
+            #expect(h.text == "Alarm")
             #expect(h.badges.count == 1)
         } else {
             Issue.record("Expected heading with badges")

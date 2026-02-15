@@ -37,21 +37,25 @@ struct HAWatchApp: App {
 
     // MARK: - Deep Linking
 
-    /// Handle `hawatch://dashboard/{dashboardId}/view/{viewPath}` URLs.
+    /// Handle deep link URLs:
+    /// - `hawatch://dashboard/{dashboardId}/view/{viewPath}`
+    /// - `hawatch://dashboard/{dashboardId}`
+    /// - `hawatch://entity/{entityId}` (from complications, opens default dashboard)
     private func handleDeepLink(_ url: URL) {
         guard url.scheme == "hawatch" else { return }
 
         let pathComponents = url.pathComponents.filter { $0 != "/" }
-        // Expected: ["dashboard", "{id}", "view", "{path}"]
-        // or: ["dashboard", "{id}"]
-        guard pathComponents.count >= 2,
-              pathComponents[0] == "dashboard" else { return }
 
-        deepLinkDashboardId = pathComponents[1]
-
-        if pathComponents.count >= 4, pathComponents[2] == "view" {
-            deepLinkViewPath = pathComponents[3]
-        } else {
+        if pathComponents.count >= 2, pathComponents[0] == "dashboard" {
+            deepLinkDashboardId = pathComponents[1]
+            if pathComponents.count >= 4, pathComponents[2] == "view" {
+                deepLinkViewPath = pathComponents[3]
+            } else {
+                deepLinkViewPath = nil
+            }
+        } else if pathComponents.count >= 1, pathComponents[0] == "entity" {
+            // Entity deep link from complication — open default dashboard
+            deepLinkDashboardId = nil
             deepLinkViewPath = nil
         }
     }
@@ -109,6 +113,12 @@ private struct DeepLinkViewPathKey: EnvironmentKey {
     static let defaultValue: String? = nil
 }
 
+// MARK: - Shared API Client Environment Key
+
+private struct APIClientKey: EnvironmentKey {
+    static let defaultValue: HAAPIClient? = nil
+}
+
 extension EnvironmentValues {
     var deepLinkDashboardId: String? {
         get { self[DeepLinkDashboardIdKey.self] }
@@ -118,5 +128,10 @@ extension EnvironmentValues {
     var deepLinkViewPath: String? {
         get { self[DeepLinkViewPathKey.self] }
         set { self[DeepLinkViewPathKey.self] = newValue }
+    }
+
+    var apiClient: HAAPIClient? {
+        get { self[APIClientKey.self] }
+        set { self[APIClientKey.self] = newValue }
     }
 }

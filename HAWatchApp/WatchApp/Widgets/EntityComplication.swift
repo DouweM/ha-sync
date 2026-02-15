@@ -8,6 +8,7 @@ import HAWatchCore
 
 struct EntityComplicationEntry: TimelineEntry {
     let date: Date
+    let entityId: String?
     let entityName: String
     let stateText: String
     let iconName: String
@@ -19,6 +20,7 @@ struct EntityComplicationProvider: AppIntentTimelineProvider {
     func placeholder(in context: Context) -> EntityComplicationEntry {
         EntityComplicationEntry(
             date: .now,
+            entityId: nil,
             entityName: "Temperature",
             stateText: "23°C",
             iconName: "thermometer.medium",
@@ -34,6 +36,7 @@ struct EntityComplicationProvider: AppIntentTimelineProvider {
     func timeline(for configuration: EntityComplicationIntent, in context: Context) async -> Timeline<EntityComplicationEntry> {
         let entry = await fetchEntry(for: configuration) ?? EntityComplicationEntry(
             date: .now,
+            entityId: configuration.entityId,
             entityName: configuration.entityName ?? "Entity",
             stateText: "--",
             iconName: "circle.fill",
@@ -59,9 +62,34 @@ struct EntityComplicationProvider: AppIntentTimelineProvider {
     /// Provide relevance hints for Smart Stack ordering.
     /// Home automation entities are most relevant during morning/evening routines.
     func relevances() async -> WidgetRelevances<EntityComplicationIntent> {
-        // TODO: Add location-based relevance (surface home entities when at home GPS coordinates)
-        // TODO: APNs push widget updates (requires HA addon to send push on state change)
-        return WidgetRelevances([])
+        // Surface home automation widgets during morning and evening routines
+        let calendar = Calendar.current
+        let now = Date()
+
+        var relevances: [WidgetRelevance<EntityComplicationIntent>] = []
+
+        // Morning routine: 6:00 - 9:00
+        if var morningStart = calendar.date(bySettingHour: 6, minute: 0, second: 0, of: now),
+           var morningEnd = calendar.date(bySettingHour: 9, minute: 0, second: 0, of: now) {
+            // If we're past 9am, use tomorrow's window
+            if now > morningEnd {
+                morningStart = calendar.date(byAdding: .day, value: 1, to: morningStart) ?? morningStart
+                morningEnd = calendar.date(byAdding: .day, value: 1, to: morningEnd) ?? morningEnd
+            }
+            relevances.append(WidgetRelevance(relevance: .date(from: morningStart, to: morningEnd)))
+        }
+
+        // Evening routine: 17:00 - 22:00
+        if var eveningStart = calendar.date(bySettingHour: 17, minute: 0, second: 0, of: now),
+           var eveningEnd = calendar.date(bySettingHour: 22, minute: 0, second: 0, of: now) {
+            if now > eveningEnd {
+                eveningStart = calendar.date(byAdding: .day, value: 1, to: eveningStart) ?? eveningStart
+                eveningEnd = calendar.date(byAdding: .day, value: 1, to: eveningEnd) ?? eveningEnd
+            }
+            relevances.append(WidgetRelevance(relevance: .date(from: eveningStart, to: eveningEnd)))
+        }
+
+        return WidgetRelevances(relevances)
     }
 
     @MainActor
@@ -95,6 +123,7 @@ struct EntityComplicationProvider: AppIntentTimelineProvider {
 
         return EntityComplicationEntry(
             date: .now,
+            entityId: entityId,
             entityName: configuration.entityName ?? entityState.displayName,
             stateText: formatted.text,
             iconName: iconName,
@@ -222,17 +251,20 @@ struct EntityComplicationEntryView: View {
     let entry: EntityComplicationEntry
 
     var body: some View {
-        switch widgetFamily {
-        case .accessoryCircular:
-            CircularComplicationView(entry: entry)
-        case .accessoryRectangular:
-            RectangularComplicationView(entry: entry)
-        case .accessoryInline:
-            InlineComplicationView(entry: entry)
-        case .accessoryCorner:
-            CornerComplicationView(entry: entry)
-        default:
-            CircularComplicationView(entry: entry)
+        Group {
+            switch widgetFamily {
+            case .accessoryCircular:
+                CircularComplicationView(entry: entry)
+            case .accessoryRectangular:
+                RectangularComplicationView(entry: entry)
+            case .accessoryInline:
+                InlineComplicationView(entry: entry)
+            case .accessoryCorner:
+                CornerComplicationView(entry: entry)
+            default:
+                CircularComplicationView(entry: entry)
+            }
         }
+        .widgetURL(URL(string: "hawatch://entity/\(entry.entityId ?? "")")!)
     }
 }

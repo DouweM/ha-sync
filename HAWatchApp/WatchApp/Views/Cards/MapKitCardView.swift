@@ -13,8 +13,8 @@ struct MapKitCardView: View {
         } label: {
             Map(initialPosition: .region(MKCoordinateRegion(
                 center: CLLocationCoordinate2D(
-                    latitude: nativeMap.centerLatitude,
-                    longitude: nativeMap.centerLongitude
+                    latitude: nativeMap.effectiveCenterLatitude,
+                    longitude: nativeMap.effectiveCenterLongitude
                 ),
                 span: MKCoordinateSpan(latitudeDelta: 0.01, longitudeDelta: 0.01)
             ))) {
@@ -34,7 +34,7 @@ struct MapKitCardView: View {
                             )
                         } else {
                             Circle()
-                                .fill(.blue)
+                                .fill(Color.fromHAColorName(marker.colorName))
                                 .frame(width: 12, height: 12)
                                 .overlay {
                                     Text(String(marker.name.prefix(1)))
@@ -46,6 +46,7 @@ struct MapKitCardView: View {
                 }
 
                 ForEach(Array(nativeMap.zones.enumerated()), id: \.offset) { _, zone in
+                    let zoneColor = Color.fromHAColorName(zone.colorName)
                     MapCircle(
                         center: CLLocationCoordinate2D(
                             latitude: zone.latitude,
@@ -53,8 +54,8 @@ struct MapKitCardView: View {
                         ),
                         radius: zone.radius
                     )
-                    .foregroundStyle(.blue.opacity(0.15))
-                    .stroke(.blue.opacity(0.5), lineWidth: 1)
+                    .foregroundStyle(zoneColor.opacity(0.15))
+                    .stroke(zoneColor.opacity(0.5), lineWidth: 1)
                 }
             }
             .mapStyle(nativeMap.useSatellite ? .imagery : .standard)
@@ -78,8 +79,8 @@ struct MapFullScreenView: View {
     var body: some View {
         Map(initialPosition: .region(MKCoordinateRegion(
             center: CLLocationCoordinate2D(
-                latitude: nativeMap.centerLatitude,
-                longitude: nativeMap.centerLongitude
+                latitude: nativeMap.effectiveCenterLatitude,
+                longitude: nativeMap.effectiveCenterLongitude
             ),
             span: MKCoordinateSpan(latitudeDelta: 0.005, longitudeDelta: 0.005)
         ))) {
@@ -99,7 +100,7 @@ struct MapFullScreenView: View {
                         )
                     } else {
                         Circle()
-                            .fill(.blue)
+                            .fill(Color.fromHAColorName(marker.colorName))
                             .frame(width: 16, height: 16)
                             .overlay {
                                 Text(String(marker.name.prefix(1)))
@@ -111,6 +112,7 @@ struct MapFullScreenView: View {
             }
 
             ForEach(Array(nativeMap.zones.enumerated()), id: \.offset) { _, zone in
+                let zoneColor = Color.fromHAColorName(zone.colorName)
                 MapCircle(
                     center: CLLocationCoordinate2D(
                         latitude: zone.latitude,
@@ -118,8 +120,8 @@ struct MapFullScreenView: View {
                     ),
                     radius: zone.radius
                 )
-                .foregroundStyle(.blue.opacity(0.15))
-                .stroke(.blue.opacity(0.5), lineWidth: 1)
+                .foregroundStyle(zoneColor.opacity(0.15))
+                .stroke(zoneColor.opacity(0.5), lineWidth: 1)
             }
         }
         .mapStyle(nativeMap.useSatellite ? .imagery : .standard)

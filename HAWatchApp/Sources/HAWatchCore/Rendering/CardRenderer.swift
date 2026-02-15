@@ -183,12 +183,16 @@ public struct CardRenderer: Sendable {
     public func renderImageMap(
         imageURL: String,
         markers: [MapMarker],
-        zoneMarkers: [ZoneMarker]
+        zoneMarkers: [ZoneMarker],
+        focusCenterX: Double? = nil,
+        focusCenterY: Double? = nil
     ) -> RenderedCard? {
         return .imageMap(RenderedImageMap(
             imageURL: imageURL,
             markers: markers,
-            zoneMarkers: zoneMarkers
+            zoneMarkers: zoneMarkers,
+            focusCenterX: focusCenterX,
+            focusCenterY: focusCenterY
         ))
     }
 
@@ -198,14 +202,18 @@ public struct CardRenderer: Sendable {
         centerLongitude: Double,
         markers: [MapMarker],
         zones: [MapZone],
-        useSatellite: Bool
+        useSatellite: Bool,
+        focusCenterLatitude: Double? = nil,
+        focusCenterLongitude: Double? = nil
     ) -> RenderedCard? {
         return .nativeMap(RenderedNativeMap(
             centerLatitude: centerLatitude,
             centerLongitude: centerLongitude,
             markers: markers,
             zones: zones,
-            useSatellite: useSatellite
+            useSatellite: useSatellite,
+            focusCenterLatitude: focusCenterLatitude,
+            focusCenterLongitude: focusCenterLongitude
         ))
     }
 }

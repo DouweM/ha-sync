@@ -62,7 +62,7 @@ struct SectionRendererTests {
             Issue.record("Expected .spacing")
         }
         if case .heading(let h) = result!.items[1] {
-            #expect(h.text == "LIGHTS")
+            #expect(h.text == "Lights")
         } else {
             Issue.record("Expected .heading")
         }
@@ -99,7 +99,7 @@ struct SectionRendererTests {
         #expect(result!.items.count == 2)
 
         if case .heading(let h) = result!.items[1] {
-            #expect(h.text == "SECURITY")
+            #expect(h.text == "Security")
             #expect(h.badges.count == 1)
         } else {
             Issue.record("Expected .heading")

@@ -75,21 +75,8 @@ struct TileCardView: View {
 
     private var tileIconColor: Color? {
         if let colorName = tile.colorName {
-            return tileColor(colorName)
+            return .fromHAColorName(colorName)
         }
         return tile.state.color.isActive ? tile.state.color.swiftUIColor : nil
-    }
-
-    private func tileColor(_ name: String) -> Color {
-        switch name.lowercased() {
-        case "red": return .red
-        case "green": return .green
-        case "blue", "light-blue": return .blue
-        case "yellow", "amber": return .yellow
-        case "orange", "deep-orange": return .orange
-        case "cyan", "teal": return .cyan
-        case "purple", "pink": return .purple
-        default: return .accentColor
-        }
     }
 }

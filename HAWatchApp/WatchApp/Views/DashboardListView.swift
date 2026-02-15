@@ -52,9 +52,11 @@ struct DashboardListView: View {
             .navigationTitle("Dashboards")
             .navigationDestination(for: DashboardListItem.self) { dashboard in
                 ViewPageView(viewModel: viewModel, dashboardId: dashboard.urlPath)
+                    .environment(\.apiClient, viewModel.apiClient)
             }
             .navigationDestination(for: String.self) { dashboardId in
                 ViewPageView(viewModel: viewModel, dashboardId: dashboardId)
+                    .environment(\.apiClient, viewModel.apiClient)
             }
         }
         .task {

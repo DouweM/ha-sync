@@ -4,6 +4,7 @@ import HAWatchCore
 struct CameraCardView: View {
     let camera: RenderedCamera
     @Environment(SettingsManager.self) private var settings
+    @Environment(\.apiClient) private var sharedAPIClient
     @State private var snapshotData: Data?
     @State private var showFullScreen = false
     @State private var loadFailed = false
@@ -63,7 +64,7 @@ struct CameraCardView: View {
             loadFailed = true
             return
         }
-        let client = HAAPIClient(baseURL: baseURL, token: settings.appSettings.accessToken)
+        let client = sharedAPIClient ?? HAAPIClient(baseURL: baseURL, token: settings.appSettings.accessToken)
         do {
             let result = try await withThrowingTaskGroup(of: Data.self) { group in
                 group.addTask {

@@ -197,11 +197,21 @@ public struct RenderedImageMap: Sendable {
     public var imageURL: String
     public var markers: [MapMarker]
     public var zoneMarkers: [ZoneMarker]
+    public var focusCenterX: Double?
+    public var focusCenterY: Double?
 
-    public init(imageURL: String, markers: [MapMarker] = [], zoneMarkers: [ZoneMarker] = []) {
+    public init(
+        imageURL: String,
+        markers: [MapMarker] = [],
+        zoneMarkers: [ZoneMarker] = [],
+        focusCenterX: Double? = nil,
+        focusCenterY: Double? = nil
+    ) {
         self.imageURL = imageURL
         self.markers = markers
         self.zoneMarkers = zoneMarkers
+        self.focusCenterX = focusCenterX
+        self.focusCenterY = focusCenterY
     }
 }
 
@@ -211,19 +221,34 @@ public struct RenderedNativeMap: Sendable {
     public var markers: [MapMarker]
     public var zones: [MapZone]
     public var useSatellite: Bool
+    public var focusCenterLatitude: Double?
+    public var focusCenterLongitude: Double?
 
     public init(
         centerLatitude: Double,
         centerLongitude: Double,
         markers: [MapMarker] = [],
         zones: [MapZone] = [],
-        useSatellite: Bool = true
+        useSatellite: Bool = true,
+        focusCenterLatitude: Double? = nil,
+        focusCenterLongitude: Double? = nil
     ) {
         self.centerLatitude = centerLatitude
         self.centerLongitude = centerLongitude
         self.markers = markers
         self.zones = zones
         self.useSatellite = useSatellite
+        self.focusCenterLatitude = focusCenterLatitude
+        self.focusCenterLongitude = focusCenterLongitude
+    }
+
+    /// The effective center, using focus override if available.
+    public var effectiveCenterLatitude: Double {
+        focusCenterLatitude ?? centerLatitude
+    }
+
+    public var effectiveCenterLongitude: Double {
+        focusCenterLongitude ?? centerLongitude
     }
 }
 
@@ -293,6 +318,7 @@ public struct MapZone: Sendable {
     public var longitude: Double
     public var radius: Double
     public var iconName: String?
+    public var colorName: String?
 
     public init(
         entityId: String,
@@ -300,7 +326,8 @@ public struct MapZone: Sendable {
         latitude: Double,
         longitude: Double,
         radius: Double,
-        iconName: String? = nil
+        iconName: String? = nil,
+        colorName: String? = nil
     ) {
         self.entityId = entityId
         self.name = name
@@ -308,6 +335,7 @@ public struct MapZone: Sendable {
         self.longitude = longitude
         self.radius = radius
         self.iconName = iconName
+        self.colorName = colorName
     }
 }
 

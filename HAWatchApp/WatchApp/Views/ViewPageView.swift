@@ -25,18 +25,41 @@ struct ViewPageView: View {
                 Text("No views")
                     .foregroundStyle(.secondary)
             } else {
-                TabView(selection: $viewModel.selectedViewIndex) {
-                    ForEach(Array(viewModel.renderedViews.enumerated()), id: \.offset) { index, renderedView in
-                        SingleViewPage(renderedView: renderedView, viewModel: viewModel)
-                            .tag(index)
-                            .task(id: viewModel.staleViewIndices.contains(index)) {
-                                if viewModel.staleViewIndices.contains(index) {
-                                    await viewModel.refreshIfStale(viewIndex: index)
-                                }
-                            }
+                VStack(spacing: 0) {
+                    // Offline/reconnecting banner
+                    if viewModel.connectionState == .disconnected {
+                        HStack(spacing: 4) {
+                            Image(systemName: "wifi.slash")
+                                .font(.caption2)
+                            Text("Offline")
+                                .font(.caption2)
+                        }
+                        .foregroundStyle(.secondary)
+                        .padding(.vertical, 2)
+                    } else if viewModel.connectionState == .reconnecting {
+                        HStack(spacing: 4) {
+                            ProgressView()
+                                .controlSize(.mini)
+                            Text("Reconnecting...")
+                                .font(.caption2)
+                        }
+                        .foregroundStyle(.secondary)
+                        .padding(.vertical, 2)
                     }
+
+                    TabView(selection: $viewModel.selectedViewIndex) {
+                        ForEach(Array(viewModel.renderedViews.enumerated()), id: \.offset) { index, renderedView in
+                            SingleViewPage(renderedView: renderedView, viewModel: viewModel)
+                                .tag(index)
+                                .task(id: viewModel.staleViewIndices.contains(index)) {
+                                    if viewModel.staleViewIndices.contains(index) {
+                                        await viewModel.refreshIfStale(viewIndex: index)
+                                    }
+                                }
+                        }
+                    }
+                    .tabViewStyle(.verticalPage)
                 }
-                .tabViewStyle(.verticalPage)
             }
         }
         .navigationTitle(viewModel.renderedViews.isEmpty ? "Loading" : (viewModel.renderedViews[safe: viewModel.selectedViewIndex]?.title ?? ""))

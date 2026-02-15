@@ -4,6 +4,7 @@ import HAWatchCore
 struct ImageMapCardView: View {
     let imageMap: RenderedImageMap
     @Environment(SettingsManager.self) private var settings
+    @Environment(\.apiClient) private var sharedAPIClient
     @State private var imageData: Data?
     @State private var showFullScreen = false
     @State private var loadFailed = false
@@ -13,6 +14,9 @@ struct ImageMapCardView: View {
             showFullScreen = true
         } label: {
             GeometryReader { geometry in
+                let focusOffsetX = imageMap.focusCenterX.map { (0.5 - $0) * geometry.size.width } ?? 0
+                let focusOffsetY = imageMap.focusCenterY.map { (0.5 - $0) * geometry.size.height } ?? 0
+
                 ZStack {
                     // Background image
                     if let imageData = imageData,
@@ -21,6 +25,7 @@ struct ImageMapCardView: View {
                             .resizable()
                             .scaledToFill()
                             .frame(width: geometry.size.width, height: geometry.size.height)
+                            .offset(x: focusOffsetX, y: focusOffsetY)
                     } else if loadFailed {
                         RoundedRectangle(cornerRadius: 8)
                             .fill(.regularMaterial)
@@ -45,18 +50,31 @@ struct ImageMapCardView: View {
                     // Entity markers at normalized positions
                     ForEach(Array(imageMap.markers.enumerated()), id: \.offset) { _, marker in
                         if let x = marker.normalizedX, let y = marker.normalizedY {
-                            Circle()
-                                .fill(markerColor(marker.colorName))
-                                .frame(width: CGFloat(marker.size ?? 24), height: CGFloat(marker.size ?? 24))
-                                .overlay {
-                                    Text(String(marker.name.prefix(1)))
-                                        .font(.system(size: 10, weight: .bold))
-                                        .foregroundStyle(.white)
+                            Group {
+                                if let pictureURL = marker.entityPictureURL,
+                                   !pictureURL.isEmpty,
+                                   let baseURL = settings.appSettings.baseURL {
+                                    EntityPictureView(
+                                        url: pictureURL,
+                                        baseURL: baseURL,
+                                        token: settings.appSettings.accessToken,
+                                        size: CGFloat(marker.size ?? 24)
+                                    )
+                                } else {
+                                    Circle()
+                                        .fill(Color.fromHAColorName(marker.colorName))
+                                        .frame(width: CGFloat(marker.size ?? 24), height: CGFloat(marker.size ?? 24))
+                                        .overlay {
+                                            Text(String(marker.name.prefix(1)))
+                                                .font(.system(size: 10, weight: .bold))
+                                                .foregroundStyle(.white)
+                                        }
                                 }
-                                .position(
-                                    x: x * geometry.size.width,
-                                    y: y * geometry.size.height
-                                )
+                            }
+                            .position(
+                                x: x * geometry.size.width + focusOffsetX,
+                                y: y * geometry.size.height + focusOffsetY
+                            )
                         }
                     }
 
@@ -65,10 +83,10 @@ struct ImageMapCardView: View {
                         if let iconName = zone.iconName {
                             Image(systemName: iconName)
                                 .font(.caption2)
-                                .foregroundStyle(markerColor(zone.colorName).opacity(0.7))
+                                .foregroundStyle(Color.fromHAColorName(zone.colorName).opacity(0.7))
                                 .position(
-                                    x: zone.normalizedX * geometry.size.width,
-                                    y: zone.normalizedY * geometry.size.height
+                                    x: zone.normalizedX * geometry.size.width + focusOffsetX,
+                                    y: zone.normalizedY * geometry.size.height + focusOffsetY
                                 )
                         }
                     }
@@ -92,7 +110,7 @@ struct ImageMapCardView: View {
             loadFailed = true
             return
         }
-        let client = HAAPIClient(baseURL: baseURL, token: settings.appSettings.accessToken)
+        let client = sharedAPIClient ?? HAAPIClient(baseURL: baseURL, token: settings.appSettings.accessToken)
         do {
             let result = try await withThrowingTaskGroup(of: Data.self) { group in
                 group.addTask {
@@ -112,23 +130,12 @@ struct ImageMapCardView: View {
         }
     }
 
-    private func markerColor(_ name: String?) -> Color {
-        switch name?.lowercased() {
-        case "red": return .red
-        case "blue": return .blue
-        case "green": return .green
-        case "yellow": return .yellow
-        case "orange": return .orange
-        case "purple": return .purple
-        case "pink": return .pink
-        default: return .accentColor
-        }
-    }
 }
 
 struct ImageMapFullScreenView: View {
     let imageMap: RenderedImageMap
     let imageData: Data?
+    @Environment(SettingsManager.self) private var settings
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
@@ -145,18 +152,31 @@ struct ImageMapFullScreenView: View {
                     // Markers overlaid on the image
                     ForEach(Array(imageMap.markers.enumerated()), id: \.offset) { _, marker in
                         if let x = marker.normalizedX, let y = marker.normalizedY {
-                            Circle()
-                                .fill(markerColor(marker.colorName))
-                                .frame(width: CGFloat(marker.size ?? 28), height: CGFloat(marker.size ?? 28))
-                                .overlay {
-                                    Text(String(marker.name.prefix(1)))
-                                        .font(.system(size: 12, weight: .bold))
-                                        .foregroundStyle(.white)
+                            Group {
+                                if let pictureURL = marker.entityPictureURL,
+                                   !pictureURL.isEmpty,
+                                   let baseURL = settings.appSettings.baseURL {
+                                    EntityPictureView(
+                                        url: pictureURL,
+                                        baseURL: baseURL,
+                                        token: settings.appSettings.accessToken,
+                                        size: CGFloat(marker.size ?? 28)
+                                    )
+                                } else {
+                                    Circle()
+                                        .fill(Color.fromHAColorName(marker.colorName))
+                                        .frame(width: CGFloat(marker.size ?? 28), height: CGFloat(marker.size ?? 28))
+                                        .overlay {
+                                            Text(String(marker.name.prefix(1)))
+                                                .font(.system(size: 12, weight: .bold))
+                                                .foregroundStyle(.white)
+                                        }
                                 }
-                                .position(
-                                    x: x * geometry.size.width,
-                                    y: y * geometry.size.height
-                                )
+                            }
+                            .position(
+                                x: x * geometry.size.width,
+                                y: y * geometry.size.height
+                            )
                         }
                     }
                 } else {
@@ -173,18 +193,5 @@ struct ImageMapFullScreenView: View {
         }
         .ignoresSafeArea()
         .onTapGesture { dismiss() }
-    }
-
-    private func markerColor(_ name: String?) -> Color {
-        switch name?.lowercased() {
-        case "red": return .red
-        case "blue": return .blue
-        case "green": return .green
-        case "yellow": return .yellow
-        case "orange": return .orange
-        case "purple": return .purple
-        case "pink": return .pink
-        default: return .accentColor
-        }
     }
 }

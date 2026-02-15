@@ -358,7 +358,7 @@ public actor ViewRenderer {
         }
 
         return RenderedHeading(
-            text: text.uppercased(),
+            text: text,
             iconName: iconName,
             badges: badges
         )
@@ -616,6 +616,14 @@ public actor ViewRenderer {
         let markers = await fetchMapMarkers(entityIds: entityIds, mapEntities: mapEntities, stateProvider: stateProvider)
         guard !markers.isEmpty else { return nil }
 
+        // Resolve focus_entity coordinates if specified
+        let focusCoords: (lat: Double, lon: Double)?
+        if let focusEntity = card.focusEntity {
+            focusCoords = resolveFocusCoordinates(entityId: focusEntity, markers: markers, zones: await fetchMapZones())
+        } else {
+            focusCoords = nil
+        }
+
         // Check if this is an image-overlay map (has image plugin with bounds)
         if let plugins = card.plugins,
            let imagePlugin = plugins.first(where: { $0.name == "image" }),
@@ -633,13 +641,24 @@ public actor ViewRenderer {
                 return m
             }
 
+            // Resolve focus center in normalized coordinates
+            var focusCenterX: Double?
+            var focusCenterY: Double?
+            if let fc = focusCoords,
+               let pos = coordMapper.normalize(latitude: fc.lat, longitude: fc.lon) {
+                focusCenterX = pos.x
+                focusCenterY = pos.y
+            }
+
             // Fetch zone markers
             let zones = await fetchZoneMarkers(coordMapper: coordMapper)
 
             return cardRenderer.renderImageMap(
                 imageURL: imageURL,
                 markers: normalizedMarkers,
-                zoneMarkers: zones
+                zoneMarkers: zones,
+                focusCenterX: focusCenterX,
+                focusCenterY: focusCenterY
             )
         } else {
             // Native MapKit mode
@@ -654,7 +673,9 @@ public actor ViewRenderer {
                 centerLongitude: avgLon,
                 markers: markers,
                 zones: zones,
-                useSatellite: card.darkMode ?? true
+                useSatellite: card.darkMode ?? true,
+                focusCenterLatitude: focusCoords?.lat,
+                focusCenterLongitude: focusCoords?.lon
             )
         }
     }
@@ -755,6 +776,23 @@ public actor ViewRenderer {
         return markers
     }
 
+    /// Resolve focus_entity to GPS coordinates by checking markers first, then zones.
+    private func resolveFocusCoordinates(
+        entityId: String,
+        markers: [MapMarker],
+        zones: [MapZone]
+    ) -> (lat: Double, lon: Double)? {
+        // Check if the focus entity is a tracked marker
+        if let marker = markers.first(where: { $0.entityId == entityId }) {
+            return (marker.latitude, marker.longitude)
+        }
+        // Check if it's a zone
+        if let zone = zones.first(where: { $0.entityId == entityId }) {
+            return (zone.latitude, zone.longitude)
+        }
+        return nil
+    }
+
     private func fetchZoneMarkers(coordMapper: CoordinateMapper) async -> [ZoneMarker] {
         let template = """
         [{% for z in states.zone %}{"entity_id": {{ z.entity_id | tojson }}, "name": {{ z.name | tojson }}, "icon": {{ (z.attributes.icon | default("")) | tojson }}, "lat": {{ z.attributes.latitude | default(0) }}, "lon": {{ z.attributes.longitude | default(0) }}}{% if not loop.last %},{% endif %}{% endfor %}]
@@ -779,7 +817,7 @@ public actor ViewRenderer {
 
     private func fetchMapZones() async -> [MapZone] {
         let template = """
-        [{% for z in states.zone %}{"entity_id": {{ z.entity_id | tojson }}, "name": {{ z.name | tojson }}, "icon": {{ (z.attributes.icon | default("")) | tojson }}, "lat": {{ z.attributes.latitude | default(0) }}, "lon": {{ z.attributes.longitude | default(0) }}, "radius": {{ z.attributes.radius | default(0) }}}{% if not loop.last %},{% endif %}{% endfor %}]
+        [{% for z in states.zone %}{"entity_id": {{ z.entity_id | tojson }}, "name": {{ z.name | tojson }}, "icon": {{ (z.attributes.icon | default("")) | tojson }}, "lat": {{ z.attributes.latitude | default(0) }}, "lon": {{ z.attributes.longitude | default(0) }}, "radius": {{ z.attributes.radius | default(0) }}, "color": {{ (z.attributes.color | default("")) | tojson }}}{% if not loop.last %},{% endif %}{% endfor %}]
         """
         guard let output = try? await templateService.evaluate(template),
               let data = output.replacingOccurrences(of: "\n", with: "").data(using: .utf8),
@@ -788,13 +826,15 @@ public actor ViewRenderer {
 
         return zones.map { zone in
             let iconName = zone.icon.isEmpty ? nil : iconMapper.sfSymbolName(for: zone.icon)
+            let colorName = zone.color.isEmpty ? nil : zone.color
             return MapZone(
                 entityId: zone.entityId,
                 name: zone.name,
                 latitude: zone.lat,
                 longitude: zone.lon,
                 radius: zone.radius,
-                iconName: iconName
+                iconName: iconName,
+                colorName: colorName
             )
         }
     }
@@ -822,10 +862,11 @@ private struct MapZoneJSON: Codable {
     var lat: Double
     var lon: Double
     var radius: Double
+    var color: String
 
     enum CodingKeys: String, CodingKey {
         case entityId = "entity_id"
-        case name, icon, lat, lon, radius
+        case name, icon, lat, lon, radius, color
     }
 }
 
