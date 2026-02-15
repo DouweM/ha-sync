@@ -44,6 +44,8 @@ public struct BadgeRenderer: Sendable {
         badge: BadgeConfig,
         contentResult: String?,
         labelResult: String?,
+        iconResult: String? = nil,
+        pictureResult: String? = nil,
         stateProvider: (String) -> EntityState?,
         currentUserId: String? = nil
     ) -> RenderedBadge? {
@@ -53,8 +55,18 @@ public struct BadgeRenderer: Sendable {
             currentUserId: currentUserId
         ) else { return nil }
 
+        // Use evaluated icon template if available, otherwise use static icon
+        let effectiveIcon: String?
+        if let evaluated = iconResult, !evaluated.isEmpty {
+            effectiveIcon = evaluated
+        } else if let icon = badge.icon, !icon.contains("{") {
+            effectiveIcon = icon
+        } else {
+            effectiveIcon = badge.icon
+        }
+
         let iconName = iconMapper.sfSymbolName(
-            for: badge.icon,
+            for: effectiveIcon,
             entityId: badge.entity
         )
 
@@ -89,11 +101,20 @@ public struct BadgeRenderer: Sendable {
 
         guard !name.isEmpty else { return nil }
 
+        // Resolve picture URL from template evaluation
+        let pictureURL: String?
+        if let evaluated = pictureResult, !evaluated.isEmpty {
+            pictureURL = evaluated
+        } else {
+            pictureURL = nil
+        }
+
         return RenderedBadge(
             iconName: iconName,
             name: name,
             state: state,
-            entityId: badge.entity
+            entityId: badge.entity,
+            entityPictureURL: pictureURL
         )
     }
 
@@ -130,7 +151,7 @@ public struct BadgeRenderer: Sendable {
         let displayName = badge.name ?? entityState.displayName
 
         var formatted: FormattedState?
-        if badge.stateContent != "name" && showState {
+        if !(badge.stateContent?.isName ?? false) && showState {
             formatted = stateFormatter.format(
                 entityId: entityId,
                 state: entityState.state,

@@ -82,7 +82,8 @@ public struct CardConfig: Codable, Sendable {
     public var gridOptions: GridOptions?
     public var showState: Bool?
     public var showIcon: Bool?
-    public var stateContent: String?
+    public var stateContent: StateContentValue?
+    public var color: String?
 
     // auto-entities
     public var filter: AutoEntitiesFilter?
@@ -113,7 +114,7 @@ public struct CardConfig: Codable, Sendable {
     public var hoursToShow: Int?
 
     enum CodingKeys: String, CodingKey {
-        case type, entity, name, icon, heading, badges, visibility
+        case type, entity, name, icon, heading, badges, visibility, color
         case gridOptions = "grid_options"
         case showState = "show_state"
         case showIcon = "show_icon"
@@ -142,7 +143,8 @@ public struct CardConfig: Codable, Sendable {
         gridOptions: GridOptions? = nil,
         showState: Bool? = nil,
         showIcon: Bool? = nil,
-        stateContent: String? = nil,
+        stateContent: StateContentValue? = nil,
+        color: String? = nil,
         filter: AutoEntitiesFilter? = nil,
         card: CardConfig? = nil,
         target: LogbookTarget? = nil,
@@ -167,6 +169,7 @@ public struct CardConfig: Codable, Sendable {
         self.showState = showState
         self.showIcon = showIcon
         self.stateContent = stateContent
+        self.color = color
         self.filter = filter
         self._card = card.map { Indirect($0) }
         self.target = target
@@ -199,7 +202,7 @@ public struct BadgeConfig: Codable, Sendable {
     public var icon: String?
     public var showState: Bool?
     public var showIcon: Bool?
-    public var stateContent: String?
+    public var stateContent: StateContentValue?
     public var visibility: [VisibilityCondition]?
 
     public var showName: Bool?
@@ -226,7 +229,7 @@ public struct BadgeConfig: Codable, Sendable {
         showState: Bool? = nil,
         showIcon: Bool? = nil,
         showName: Bool? = nil,
-        stateContent: String? = nil,
+        stateContent: StateContentValue? = nil,
         visibility: [VisibilityCondition]? = nil,
         content: String? = nil,
         label: String? = nil,
@@ -246,6 +249,48 @@ public struct BadgeConfig: Codable, Sendable {
         self.label = label
         self.color = color
         self.picture = picture
+    }
+}
+
+// MARK: - Flexible state_content (string or array)
+
+public enum StateContentValue: Codable, Sendable {
+    case single(String)
+    case multiple([String])
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.singleValueContainer()
+        if let s = try? container.decode(String.self) {
+            self = .single(s)
+        } else if let arr = try? container.decode([String].self) {
+            self = .multiple(arr)
+        } else {
+            self = .single("")
+        }
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.singleValueContainer()
+        switch self {
+        case .single(let s):
+            try container.encode(s)
+        case .multiple(let arr):
+            try container.encode(arr)
+        }
+    }
+
+    public var firstValue: String? {
+        switch self {
+        case .single(let s): return s.isEmpty ? nil : s
+        case .multiple(let arr): return arr.first
+        }
+    }
+
+    public var isName: Bool {
+        switch self {
+        case .single(let s): return s == "name"
+        case .multiple(let arr): return arr.contains("name")
+        }
     }
 }
 
@@ -339,12 +384,26 @@ public struct MapEntity: Codable, Sendable {
 }
 
 public struct MapPlugin: Codable, Sendable {
+    public var name: String?
     public var type: String?
     public var url: String?
     public var bounds: [[Double]]?
+    public var options: MapPluginOptions?
 
-    public init(type: String? = nil, url: String? = nil, bounds: [[Double]]? = nil) {
+    public init(name: String? = nil, type: String? = nil, url: String? = nil, bounds: [[Double]]? = nil, options: MapPluginOptions? = nil) {
+        self.name = name
         self.type = type
+        self.url = url
+        self.bounds = bounds
+        self.options = options
+    }
+}
+
+public struct MapPluginOptions: Codable, Sendable {
+    public var url: String?
+    public var bounds: [[Double]]?
+
+    public init(url: String? = nil, bounds: [[Double]]? = nil) {
         self.url = url
         self.bounds = bounds
     }

@@ -19,7 +19,7 @@ struct TileCardView: View {
             } else if let iconName = tile.iconName {
                 EntityIconView(
                     sfSymbolName: iconName,
-                    color: tile.state.color.isActive ? tile.state.color.swiftUIColor : nil
+                    color: tileIconColor
                 )
             }
 
@@ -40,5 +40,25 @@ struct TileCardView: View {
         .padding(.horizontal, 8)
         .padding(.vertical, 6)
         .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 12))
+    }
+
+    private var tileIconColor: Color? {
+        if let colorName = tile.colorName {
+            return tileColor(colorName)
+        }
+        return tile.state.color.isActive ? tile.state.color.swiftUIColor : nil
+    }
+
+    private func tileColor(_ name: String) -> Color {
+        switch name.lowercased() {
+        case "red": return .red
+        case "green": return .green
+        case "blue", "light-blue": return .blue
+        case "yellow", "amber": return .yellow
+        case "orange", "deep-orange": return .orange
+        case "cyan", "teal": return .cyan
+        case "purple", "pink": return .purple
+        default: return .accentColor
+        }
     }
 }

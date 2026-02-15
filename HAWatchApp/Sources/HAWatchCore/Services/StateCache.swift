@@ -95,9 +95,11 @@ public actor StateCache {
 
         for badge in view.badges ?? [] {
             if let entity = badge.entity { entities.insert(entity) }
+            extractEntityIds(from: badge.visibility, into: &entities)
         }
 
         for section in view.sections ?? [] {
+            extractEntityIds(from: section.visibility, into: &entities)
             for card in section.cards ?? [] {
                 extractEntityIds(from: card, into: &entities)
             }
@@ -114,8 +116,10 @@ public actor StateCache {
         if let target = card.target?.entityId {
             entities.formUnion(target)
         }
+        extractEntityIds(from: card.visibility, into: &entities)
         for badge in card.badges ?? [] {
             if let entity = badge.entity { entities.insert(entity) }
+            extractEntityIds(from: badge.visibility, into: &entities)
         }
         if let nestedCard = card.card {
             extractEntityIds(from: nestedCard, into: &entities)
@@ -131,5 +135,19 @@ public actor StateCache {
             if let entity = mapEntity.entity { entities.insert(entity) }
         }
         if let focus = card.focusEntity { entities.insert(focus) }
+    }
+
+    private static func extractEntityIds(from conditions: [VisibilityCondition]?, into entities: inout Set<String>) {
+        guard let conditions = conditions else { return }
+        for condition in conditions {
+            switch condition {
+            case .state(let entity, _, _), .numericState(let entity, _, _):
+                if !entity.isEmpty { entities.insert(entity) }
+            case .or(let nested), .and(let nested), .not(let nested):
+                extractEntityIds(from: nested, into: &entities)
+            case .user, .screen:
+                break
+            }
+        }
     }
 }

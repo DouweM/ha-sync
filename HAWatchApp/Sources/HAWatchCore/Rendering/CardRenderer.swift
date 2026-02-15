@@ -54,7 +54,8 @@ public struct CardRenderer: Sendable {
             iconName: iconName,
             state: formatted,
             isHalfWidth: isHalf,
-            entityPictureURL: entityState.attributes["entity_picture"]
+            entityPictureURL: entityState.attributes["entity_picture"],
+            colorName: card.color
         )
 
         return .tile(tile)

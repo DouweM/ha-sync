@@ -52,17 +52,20 @@ public struct RenderedBadge: Sendable {
     public var name: String
     public var state: FormattedState?
     public var entityId: String?
+    public var entityPictureURL: String?
 
     public init(
         iconName: String? = nil,
         name: String,
         state: FormattedState? = nil,
-        entityId: String? = nil
+        entityId: String? = nil,
+        entityPictureURL: String? = nil
     ) {
         self.iconName = iconName
         self.name = name
         self.state = state
         self.entityId = entityId
+        self.entityPictureURL = entityPictureURL
     }
 }
 
@@ -93,6 +96,7 @@ public struct RenderedTile: Sendable {
     public var state: FormattedState
     public var isHalfWidth: Bool
     public var entityPictureURL: String?
+    public var colorName: String?
 
     public init(
         entityId: String,
@@ -100,7 +104,8 @@ public struct RenderedTile: Sendable {
         iconName: String? = nil,
         state: FormattedState,
         isHalfWidth: Bool = false,
-        entityPictureURL: String? = nil
+        entityPictureURL: String? = nil,
+        colorName: String? = nil
     ) {
         self.entityId = entityId
         self.name = name
@@ -108,6 +113,7 @@ public struct RenderedTile: Sendable {
         self.state = state
         self.isHalfWidth = isHalfWidth
         self.entityPictureURL = entityPictureURL
+        self.colorName = colorName
     }
 }
 

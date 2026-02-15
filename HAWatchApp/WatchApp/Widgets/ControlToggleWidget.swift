@@ -16,16 +16,22 @@ struct ToggleEntityIntent: AppIntent {
         self.entityId = entityId
     }
 
+    @MainActor
+    private func getSettings() -> (baseURL: URL, token: String)? {
+        guard let baseURL = SettingsManager.shared.appSettings.baseURL else { return nil }
+        return (baseURL, SettingsManager.shared.appSettings.accessToken)
+    }
+
     func perform() async throws -> some IntentResult {
         guard let entityId = entityId,
-              let baseURL = SettingsManager.shared.appSettings.baseURL
+              let settings = await getSettings()
         else {
             return .result()
         }
 
         let client = HAAPIClient(
-            baseURL: baseURL,
-            token: SettingsManager.shared.appSettings.accessToken
+            baseURL: settings.baseURL,
+            token: settings.token
         )
 
         let domain = entityId.split(separator: ".").first.map(String.init) ?? ""

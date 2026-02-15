@@ -185,4 +185,169 @@ struct DashboardConfigTests {
         #expect(badge.content == "{{ states('person.john') }}")
         #expect(badge.icon == "mdi:account")
     }
+
+    // MARK: - Bug #1: Visibility condition entities extracted
+
+    @Test("Extract entity IDs includes visibility condition entities")
+    func extractVisibilityEntities() throws {
+        let view = ViewConfig(
+            badges: [
+                BadgeConfig(entity: "person.john", visibility: [
+                    .state(entity: "binary_sensor.timezone", state: "on", stateNot: nil)
+                ])
+            ],
+            sections: [
+                SectionConfig(
+                    cards: [
+                        CardConfig(
+                            type: "tile",
+                            entity: "light.living_room",
+                            visibility: [
+                                .state(entity: "input_boolean.show", state: "on", stateNot: nil),
+                                .or(conditions: [
+                                    .state(entity: "sensor.nested_or", state: nil, stateNot: nil),
+                                    .numericState(entity: "sensor.nested_numeric", above: 10, below: nil)
+                                ])
+                            ]
+                        )
+                    ],
+                    visibility: [
+                        .state(entity: "input_boolean.section_visible", state: "on", stateNot: nil)
+                    ]
+                )
+            ]
+        )
+
+        let entities = StateCache.extractEntityIds(from: view)
+
+        // Direct entities
+        #expect(entities.contains("person.john"))
+        #expect(entities.contains("light.living_room"))
+        // Visibility condition entities
+        #expect(entities.contains("binary_sensor.timezone"))
+        #expect(entities.contains("input_boolean.show"))
+        #expect(entities.contains("input_boolean.section_visible"))
+        // Nested visibility condition entities
+        #expect(entities.contains("sensor.nested_or"))
+        #expect(entities.contains("sensor.nested_numeric"))
+    }
+
+    // MARK: - Bug #2: MapPlugin image overlay parsing
+
+    @Test("Parse map plugin with name and options")
+    func parseMapPlugin() throws {
+        let json = """
+        {
+            "views": [{
+                "sections": [{
+                    "cards": [{
+                        "type": "custom:map-card",
+                        "entities_config": [{"entity": "person.john"}],
+                        "plugins": [{
+                            "name": "image",
+                            "url": "/local/ha-map-card-image/ha-map-card-image.js",
+                            "options": {
+                                "url": "https://example.com/map.jpg",
+                                "bounds": [[51.0, 3.0], [52.0, 4.0]]
+                            }
+                        }]
+                    }]
+                }]
+            }]
+        }
+        """
+
+        let data = json.data(using: .utf8)!
+        let config = try JSONDecoder().decode(DashboardConfig.self, from: data)
+        let card = config.views[0].sections![0].cards![0]
+
+        #expect(card.plugins?.count == 1)
+        let plugin = card.plugins![0]
+        #expect(plugin.name == "image")
+        #expect(plugin.url == "/local/ha-map-card-image/ha-map-card-image.js")
+        #expect(plugin.options?.url == "https://example.com/map.jpg")
+        #expect(plugin.options?.bounds?.count == 2)
+        #expect(plugin.options?.bounds?[0] == [51.0, 3.0])
+        #expect(plugin.options?.bounds?[1] == [52.0, 4.0])
+    }
+
+    // MARK: - Bug #3: stateContent array decoding
+
+    @Test("Parse state_content as string")
+    func parseStateContentString() throws {
+        let json = """
+        {
+            "views": [{
+                "sections": [{
+                    "cards": [{
+                        "type": "tile",
+                        "entity": "sensor.temp",
+                        "state_content": "name"
+                    }]
+                }]
+            }]
+        }
+        """
+
+        let data = json.data(using: .utf8)!
+        let config = try JSONDecoder().decode(DashboardConfig.self, from: data)
+        let card = config.views[0].sections![0].cards![0]
+
+        #expect(card.stateContent?.isName == true)
+        #expect(card.stateContent?.firstValue == "name")
+    }
+
+    @Test("Parse state_content as array")
+    func parseStateContentArray() throws {
+        let json = """
+        {
+            "views": [{
+                "sections": [{
+                    "cards": [{
+                        "type": "tile",
+                        "entity": "climate.thermostat",
+                        "state_content": ["state", "temperature"]
+                    }]
+                }]
+            }]
+        }
+        """
+
+        let data = json.data(using: .utf8)!
+        let config = try JSONDecoder().decode(DashboardConfig.self, from: data)
+        let card = config.views[0].sections![0].cards![0]
+
+        #expect(card.stateContent?.isName == false)
+        #expect(card.stateContent?.firstValue == "state")
+        if case .multiple(let arr) = card.stateContent {
+            #expect(arr == ["state", "temperature"])
+        } else {
+            Issue.record("Expected .multiple state content")
+        }
+    }
+
+    // MARK: - Bug #7: Card color field
+
+    @Test("Parse tile card with color")
+    func parseTileCardColor() throws {
+        let json = """
+        {
+            "views": [{
+                "sections": [{
+                    "cards": [{
+                        "type": "tile",
+                        "entity": "light.kitchen",
+                        "color": "light-blue"
+                    }]
+                }]
+            }]
+        }
+        """
+
+        let data = json.data(using: .utf8)!
+        let config = try JSONDecoder().decode(DashboardConfig.self, from: data)
+        let card = config.views[0].sections![0].cards![0]
+
+        #expect(card.color == "light-blue")
+    }
 }

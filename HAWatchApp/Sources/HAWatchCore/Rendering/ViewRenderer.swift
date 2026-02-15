@@ -104,8 +104,8 @@ public actor ViewRenderer {
     ) async -> [RenderedBadge] {
         // Collect all mushroom badge templates for batch evaluation
         var templates: [String] = []
-        // Track which badge index maps to which template indices (content, label, color)
-        var badgeTemplateMap: [(badgeIndex: Int, contentIdx: Int?, labelIdx: Int?, colorIdx: Int?)] = []
+        // Track which badge index maps to which template indices (content, label, color, icon, picture)
+        var badgeTemplateMap: [(badgeIndex: Int, contentIdx: Int?, labelIdx: Int?, colorIdx: Int?, iconIdx: Int?, pictureIdx: Int?)] = []
 
         for (i, badge) in badges.enumerated() {
             let badgeType = badge.type ?? "entity"
@@ -114,6 +114,8 @@ public actor ViewRenderer {
             var contentIdx: Int?
             var labelIdx: Int?
             var colorIdx: Int?
+            var iconIdx: Int?
+            var pictureIdx: Int?
             if let content = badge.content {
                 contentIdx = templates.count
                 templates.append(content)
@@ -127,19 +129,31 @@ public actor ViewRenderer {
                 colorIdx = templates.count
                 templates.append(color)
             }
-            badgeTemplateMap.append((badgeIndex: i, contentIdx: contentIdx, labelIdx: labelIdx, colorIdx: colorIdx))
+            // Icon can be a Jinja template
+            if let icon = badge.icon, icon.contains("{") {
+                iconIdx = templates.count
+                templates.append(icon)
+            }
+            // Picture can be a Jinja template
+            if let picture = badge.picture, !picture.isEmpty, picture.contains("{") {
+                pictureIdx = templates.count
+                templates.append(picture)
+            }
+            badgeTemplateMap.append((badgeIndex: i, contentIdx: contentIdx, labelIdx: labelIdx, colorIdx: colorIdx, iconIdx: iconIdx, pictureIdx: pictureIdx))
         }
 
         // Batch evaluate all templates in a single API call
         let results = (try? await templateService.evaluateBatch(templates)) ?? Array(repeating: "", count: templates.count)
 
         // Build lookup from badge index to evaluated results
-        var mushroomResults: [Int: (content: String?, label: String?, color: String?)] = [:]
+        var mushroomResults: [Int: (content: String?, label: String?, color: String?, icon: String?, picture: String?)] = [:]
         for entry in badgeTemplateMap {
             let content = entry.contentIdx.map { results[$0] }
             let label = entry.labelIdx.map { results[$0] }
             let color = entry.colorIdx.map { results[$0] }
-            mushroomResults[entry.badgeIndex] = (content, label, color)
+            let icon = entry.iconIdx.map { results[$0] }
+            let picture = entry.pictureIdx.map { results[$0] }
+            mushroomResults[entry.badgeIndex] = (content, label, color, icon, picture)
         }
 
         // Render all badges
@@ -159,6 +173,8 @@ public actor ViewRenderer {
                     badge: effectiveBadge,
                     contentResult: templateResults?.content,
                     labelResult: templateResults?.label,
+                    iconResult: templateResults?.icon,
+                    pictureResult: templateResults?.picture,
                     stateProvider: stateProvider,
                     currentUserId: currentUserId
                 ) {
@@ -262,7 +278,7 @@ public actor ViewRenderer {
 
         // Collect mushroom badge templates for batch evaluation
         var templates: [String] = []
-        var badgeTemplateMap: [(badgeIndex: Int, contentIdx: Int?, labelIdx: Int?, colorIdx: Int?)] = []
+        var badgeTemplateMap: [(badgeIndex: Int, contentIdx: Int?, labelIdx: Int?, colorIdx: Int?, iconIdx: Int?, pictureIdx: Int?)] = []
 
         for (i, badgeConfig) in badgeConfigs.enumerated() {
             let badgeType = badgeConfig.type ?? "entity"
@@ -271,6 +287,8 @@ public actor ViewRenderer {
             var contentIdx: Int?
             var labelIdx: Int?
             var colorIdx: Int?
+            var iconIdx: Int?
+            var pictureIdx: Int?
             if let content = badgeConfig.content {
                 contentIdx = templates.count
                 templates.append(content)
@@ -283,17 +301,27 @@ public actor ViewRenderer {
                 colorIdx = templates.count
                 templates.append(color)
             }
-            badgeTemplateMap.append((badgeIndex: i, contentIdx: contentIdx, labelIdx: labelIdx, colorIdx: colorIdx))
+            if let icon = badgeConfig.icon, icon.contains("{") {
+                iconIdx = templates.count
+                templates.append(icon)
+            }
+            if let picture = badgeConfig.picture, !picture.isEmpty, picture.contains("{") {
+                pictureIdx = templates.count
+                templates.append(picture)
+            }
+            badgeTemplateMap.append((badgeIndex: i, contentIdx: contentIdx, labelIdx: labelIdx, colorIdx: colorIdx, iconIdx: iconIdx, pictureIdx: pictureIdx))
         }
 
         let results = (try? await templateService.evaluateBatch(templates)) ?? Array(repeating: "", count: templates.count)
 
-        var mushroomResults: [Int: (content: String?, label: String?, color: String?)] = [:]
+        var mushroomResults: [Int: (content: String?, label: String?, color: String?, icon: String?, picture: String?)] = [:]
         for entry in badgeTemplateMap {
             let content = entry.contentIdx.map { results[$0] }
             let label = entry.labelIdx.map { results[$0] }
             let color = entry.colorIdx.map { results[$0] }
-            mushroomResults[entry.badgeIndex] = (content, label, color)
+            let icon = entry.iconIdx.map { results[$0] }
+            let picture = entry.pictureIdx.map { results[$0] }
+            mushroomResults[entry.badgeIndex] = (content, label, color, icon, picture)
         }
 
         var badges: [RenderedBadge] = []
@@ -311,6 +339,8 @@ public actor ViewRenderer {
                     badge: effectiveBadge,
                     contentResult: templateResults?.content,
                     labelResult: templateResults?.label,
+                    iconResult: templateResults?.icon,
+                    pictureResult: templateResults?.picture,
                     stateProvider: stateProvider,
                     currentUserId: currentUserId
                 ) {
@@ -586,11 +616,11 @@ public actor ViewRenderer {
         let markers = await fetchMapMarkers(entityIds: entityIds, mapEntities: mapEntities, stateProvider: stateProvider)
         guard !markers.isEmpty else { return nil }
 
-        // Check if this is an image-overlay map (has tile-layer plugin with bounds)
+        // Check if this is an image-overlay map (has image plugin with bounds)
         if let plugins = card.plugins,
-           let tilePlugin = plugins.first(where: { $0.type == "tile" }),
-           let imageURL = tilePlugin.url,
-           let boundsArray = tilePlugin.bounds,
+           let imagePlugin = plugins.first(where: { $0.name == "image" }),
+           let imageURL = imagePlugin.options?.url,
+           let boundsArray = imagePlugin.options?.bounds,
            let coordMapper = CoordinateMapper(boundsArray: boundsArray) {
 
             // Image overlay mode - normalize marker positions
@@ -647,9 +677,9 @@ public actor ViewRenderer {
         // Check if the nested card config has plugin/bounds info
         let nestedCard = card.card
         if let plugins = nestedCard?.plugins,
-           let tilePlugin = plugins.first(where: { $0.type == "tile" }),
-           let imageURL = tilePlugin.url,
-           let boundsArray = tilePlugin.bounds,
+           let imagePlugin = plugins.first(where: { $0.name == "image" }),
+           let imageURL = imagePlugin.options?.url,
+           let boundsArray = imagePlugin.options?.bounds,
            let coordMapper = CoordinateMapper(boundsArray: boundsArray) {
 
             let normalizedMarkers = markers.map { marker -> MapMarker in

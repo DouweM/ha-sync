@@ -3,10 +3,20 @@ import HAWatchCore
 
 struct BadgeView: View {
     let badge: RenderedBadge
+    @Environment(SettingsManager.self) private var settings
 
     var body: some View {
         HStack(spacing: 4) {
-            if let iconName = badge.iconName {
+            if let pictureURL = badge.entityPictureURL,
+               !pictureURL.isEmpty,
+               let baseURL = settings.appSettings.baseURL {
+                EntityPictureView(
+                    url: pictureURL,
+                    baseURL: baseURL,
+                    token: settings.appSettings.accessToken,
+                    size: 16
+                )
+            } else if let iconName = badge.iconName {
                 EntityIconView(sfSymbolName: iconName, size: .caption)
             }
 
