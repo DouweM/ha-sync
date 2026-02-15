@@ -51,18 +51,32 @@ struct DashboardListView: View {
             }
             .navigationTitle("Dashboards")
             .navigationDestination(for: DashboardListItem.self) { dashboard in
-                ViewPageView(viewModel: viewModel, dashboardId: dashboard.urlPath)
-                    .environment(\.apiClient, viewModel.apiClient)
+                ViewPageView(viewModel: viewModel, dashboardId: dashboard.urlPath) { newId in
+                    navigationPath = NavigationPath()
+                    Task {
+                        await viewModel.loadDashboard(id: newId)
+                        navigationPath.append(newId)
+                    }
+                }
+                .environment(\.apiClient, viewModel.apiClient)
             }
             .navigationDestination(for: String.self) { dashboardId in
-                ViewPageView(viewModel: viewModel, dashboardId: dashboardId)
-                    .environment(\.apiClient, viewModel.apiClient)
+                ViewPageView(viewModel: viewModel, dashboardId: dashboardId) { newId in
+                    navigationPath = NavigationPath()
+                    Task {
+                        await viewModel.loadDashboard(id: newId)
+                        navigationPath.append(newId)
+                    }
+                }
+                .environment(\.apiClient, viewModel.apiClient)
             }
         }
         .task {
             viewModel.configure(settings: settings.appSettings)
 
             if let targetId = targetDashboardId {
+                // Load dashboard list in background for the picker
+                Task { await viewModel.loadDashboards() }
                 // Load the target dashboard and auto-navigate
                 await viewModel.loadDashboard(id: targetId)
                 // Select the target view if specified

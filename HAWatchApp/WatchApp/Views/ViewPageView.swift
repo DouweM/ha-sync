@@ -4,6 +4,8 @@ import HAWatchCore
 struct ViewPageView: View {
     @Bindable var viewModel: DashboardViewModel
     let dashboardId: String?
+    var onSwitchDashboard: ((String) -> Void)?
+    @State private var showDashboardPicker = false
 
     var body: some View {
         Group {
@@ -64,13 +66,65 @@ struct ViewPageView: View {
         }
         .navigationTitle(viewModel.renderedViews.isEmpty ? "Loading" : (viewModel.renderedViews[safe: viewModel.selectedViewIndex]?.title ?? ""))
         .task {
-            if viewModel.renderedViews.isEmpty {
+            if viewModel.currentDashboardId != dashboardId || viewModel.renderedViews.isEmpty {
                 await viewModel.loadDashboard(id: dashboardId)
             }
             viewModel.startPolling()
         }
         .onDisappear {
             viewModel.stopPolling()
+        }
+        .toolbar(.hidden, for: .navigationBar)
+        .onLongPressGesture {
+            showDashboardPicker = true
+        }
+        .sheet(isPresented: $showDashboardPicker) {
+            DashboardPickerSheet(
+                dashboards: viewModel.dashboards,
+                currentDashboardId: viewModel.currentDashboardId
+            ) { selectedId in
+                showDashboardPicker = false
+                if let callback = onSwitchDashboard {
+                    callback(selectedId)
+                } else {
+                    Task { await viewModel.loadDashboard(id: selectedId) }
+                }
+            }
+        }
+    }
+}
+
+struct DashboardPickerSheet: View {
+    let dashboards: [DashboardListItem]
+    let currentDashboardId: String?
+    let onSelect: (String) -> Void
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        NavigationStack {
+            List {
+                ForEach(dashboards, id: \.urlPath) { dashboard in
+                    Button {
+                        if let id = dashboard.urlPath {
+                            onSelect(id)
+                        }
+                    } label: {
+                        HStack {
+                            Label {
+                                Text(dashboard.title ?? dashboard.urlPath ?? "Dashboard")
+                            } icon: {
+                                EntityIconView(sfSymbolName: IconMapper.shared.sfSymbolName(for: dashboard.icon))
+                            }
+                            Spacer()
+                            if dashboard.urlPath == currentDashboardId {
+                                Image(systemName: "checkmark")
+                                    .foregroundStyle(Color.accentColor)
+                            }
+                        }
+                    }
+                }
+            }
+            .navigationTitle("Dashboards")
         }
     }
 }

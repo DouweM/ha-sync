@@ -149,7 +149,7 @@ public actor HAAPIClient {
     /// Fetch list of available dashboards via WebSocket.
     public func fetchDashboardList() async throws -> [DashboardListItem] {
         let wsURL = try buildWebSocketURL()
-        let messages = try await webSocketExchange(url: wsURL, command: "lovelace/dashboards", params: [:])
+        let messages = try await webSocketExchange(url: wsURL, command: "lovelace/dashboards/list", params: [:])
 
         guard let responseData = messages.last,
               let data = responseData.data(using: .utf8)

@@ -111,7 +111,7 @@ public actor StateCache {
     private static func extractEntityIds(from card: CardConfig, into entities: inout Set<String>) {
         if let entity = card.entity { entities.insert(entity) }
         if let entityList = card.entities {
-            entities.formUnion(entityList)
+            entities.formUnion(entityList.map(\.entity))
         }
         if let target = card.target?.entityId {
             entities.formUnion(target)

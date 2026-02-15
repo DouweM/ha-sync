@@ -18,6 +18,8 @@ struct ImageMapCardView: View {
                 let focusOffsetY: CGFloat = imageMap.focusCenterY.map { (0.5 - $0) * geometry.size.height } ?? 0
 
                 ZStack {
+                    Color.black // prevent grey background showing through
+
                     // Background image
                     if let imageData = imageData,
                        let uiImage = UIImage(data: imageData) {
@@ -26,6 +28,7 @@ struct ImageMapCardView: View {
                             .scaledToFill()
                             .frame(width: geometry.size.width, height: geometry.size.height)
                             .offset(x: focusOffsetX, y: focusOffsetY)
+                            .clipped()
                     } else if loadFailed {
                         RoundedRectangle(cornerRadius: 8)
                             .fill(.regularMaterial)

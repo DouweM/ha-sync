@@ -25,12 +25,6 @@ public struct CardRenderer: Sendable {
         stateProvider: (String) -> EntityState?,
         currentUserId: String? = nil
     ) -> RenderedCard? {
-        guard visibilityChecker.isVisible(
-            conditions: card.visibility,
-            stateProvider: { stateProvider($0)?.state ?? "unknown" },
-            currentUserId: currentUserId
-        ) else { return nil }
-
         guard let entityId = card.entity else { return nil }
         guard let entityState = stateProvider(entityId) else { return nil }
 
@@ -46,7 +40,7 @@ public struct CardRenderer: Sendable {
             deviceClass: entityState.deviceClass,
             unit: entityState.unit
         )
-        let isHalf = card.gridOptions?.columns == 6
+        let isHalf = card.gridOptions?.columns?.intValue == 6
 
         let tile = RenderedTile(
             entityId: entityId,
@@ -99,7 +93,8 @@ public struct CardRenderer: Sendable {
                 entityId: entityId,
                 name: name,
                 iconName: iconName,
-                state: formatted
+                state: formatted,
+                entityPictureURL: entityState.attributes["entity_picture"]
             ))
         }
 
@@ -160,7 +155,7 @@ public struct CardRenderer: Sendable {
         card: CardConfig,
         stateProvider: (String) -> EntityState?
     ) -> RenderedCard? {
-        guard let entityId = card.entity ?? card.entities?.first else { return nil }
+        guard let entityId = card.entity ?? card.entities?.first?.entity else { return nil }
         let name = card.name ?? stateProvider(entityId)?.displayName ?? entityId
 
         return .historyGraph(RenderedHistoryGraph(

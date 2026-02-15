@@ -53,19 +53,22 @@ public struct RenderedBadge: Sendable {
     public var state: FormattedState?
     public var entityId: String?
     public var entityPictureURL: String?
+    public var showName: Bool
 
     public init(
         iconName: String? = nil,
         name: String,
         state: FormattedState? = nil,
         entityId: String? = nil,
-        entityPictureURL: String? = nil
+        entityPictureURL: String? = nil,
+        showName: Bool = true
     ) {
         self.iconName = iconName
         self.name = name
         self.state = state
         self.entityId = entityId
         self.entityPictureURL = entityPictureURL
+        self.showName = showName
     }
 }
 

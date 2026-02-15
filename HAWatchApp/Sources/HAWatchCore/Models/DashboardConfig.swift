@@ -95,7 +95,7 @@ public struct CardConfig: Codable, Sendable {
 
     // logbook
     public var target: LogbookTarget?
-    public var entities: [String]?
+    public var entities: [EntityItem]?
 
     // weather
     public var showForecast: Bool?
@@ -148,7 +148,7 @@ public struct CardConfig: Codable, Sendable {
         filter: AutoEntitiesFilter? = nil,
         card: CardConfig? = nil,
         target: LogbookTarget? = nil,
-        entities: [String]? = nil,
+        entities: [EntityItem]? = nil,
         showForecast: Bool? = nil,
         mapCardEntities: [MapEntity]? = nil,
         darkMode: Bool? = nil,
@@ -185,11 +185,40 @@ public struct CardConfig: Codable, Sendable {
     }
 }
 
-public struct GridOptions: Codable, Sendable {
-    public var columns: Int?
-    public var rows: Int?
+public enum FlexibleGridValue: Codable, Sendable, Equatable {
+    case int(Int)
+    case string(String)
 
-    public init(columns: Int? = nil, rows: Int? = nil) {
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.singleValueContainer()
+        if let i = try? container.decode(Int.self) {
+            self = .int(i)
+        } else if let s = try? container.decode(String.self) {
+            self = .string(s)
+        } else {
+            self = .int(0)
+        }
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.singleValueContainer()
+        switch self {
+        case .int(let i): try container.encode(i)
+        case .string(let s): try container.encode(s)
+        }
+    }
+
+    public var intValue: Int? {
+        if case .int(let i) = self { return i }
+        return nil
+    }
+}
+
+public struct GridOptions: Codable, Sendable {
+    public var columns: FlexibleGridValue?
+    public var rows: FlexibleGridValue?
+
+    public init(columns: FlexibleGridValue? = nil, rows: FlexibleGridValue? = nil) {
         self.columns = columns
         self.rows = rows
     }
@@ -406,6 +435,33 @@ public struct MapPluginOptions: Codable, Sendable {
     public init(url: String? = nil, bounds: [[Double]]? = nil) {
         self.url = url
         self.bounds = bounds
+    }
+}
+
+// MARK: - Entity item (string or dict with "entity" key)
+
+/// Handles the `entities` field which can be either `["entity_id"]` or `[{"entity": "entity_id", ...}]`.
+public struct EntityItem: Codable, Sendable {
+    public var entity: String
+
+    public init(entity: String) {
+        self.entity = entity
+    }
+
+    public init(from decoder: Decoder) throws {
+        // Try as plain string first
+        if let container = try? decoder.singleValueContainer(),
+           let str = try? container.decode(String.self) {
+            self.entity = str
+            return
+        }
+        // Try as dict with "entity" key
+        let keyed = try decoder.container(keyedBy: CodingKeys.self)
+        self.entity = try keyed.decode(String.self, forKey: .entity)
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case entity
     }
 }
 

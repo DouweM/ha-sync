@@ -368,6 +368,13 @@ public actor ViewRenderer {
         card: CardConfig,
         stateProvider: @Sendable (String) -> EntityState?
     ) async -> RenderedCard? {
+        // Check card-level visibility before dispatching by type
+        guard visibilityChecker.isVisible(
+            conditions: card.visibility,
+            stateProvider: { stateProvider($0)?.state ?? "unknown" },
+            currentUserId: currentUserId
+        ) else { return nil }
+
         switch card.type {
         case "tile":
             return cardRenderer.renderTile(
@@ -442,7 +449,7 @@ public actor ViewRenderer {
         if let target = card.target?.entityId {
             entityIds = target
         } else if let entities = card.entities {
-            entityIds = entities
+            entityIds = entities.map(\.entity)
         }
 
         guard !entityIds.isEmpty else { return nil }
@@ -572,7 +579,7 @@ public actor ViewRenderer {
         card: CardConfig,
         stateProvider: (String) -> EntityState?
     ) async -> RenderedCard? {
-        guard let entityId = card.entity ?? card.entities?.first else { return nil }
+        guard let entityId = card.entity ?? card.entities?.first?.entity else { return nil }
         let name = card.name ?? stateProvider(entityId)?.displayName ?? entityId
         let hoursToShow = card.hoursToShow ?? 24
 

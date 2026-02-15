@@ -100,6 +100,7 @@ targets:
     entitlements:
       path: HAWatchCompanion.entitlements
       properties:
+        com.apple.developer.ubiquity-kvstore-identifier: $(TeamIdentifierPrefix)com.hawatch
         com.apple.security.application-groups:
           - group.com.hawatch
         keychain-access-groups:

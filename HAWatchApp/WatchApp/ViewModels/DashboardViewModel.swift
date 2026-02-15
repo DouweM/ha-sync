@@ -19,6 +19,7 @@ final class DashboardViewModel {
     /// Track which view indices need re-rendering (set on poll, cleared on render)
     var staleViewIndices: Set<Int> = []
 
+    private(set) var currentDashboardId: String?
     private(set) var apiClient: HAAPIClient?
     private var viewRenderer: ViewRenderer?
     private var pollingTask: Task<Void, Never>?
@@ -46,6 +47,10 @@ final class DashboardViewModel {
 
     func loadDashboard(id: String?) async {
         guard let client = apiClient else { return }
+        currentDashboardId = id
+        renderedViews = []
+        selectedViewIndex = 0
+        staleViewIndices = []
         isLoading = true
         error = nil
 

@@ -20,9 +20,11 @@ struct BadgeView: View {
                 EntityIconView(sfSymbolName: iconName, size: .caption)
             }
 
-            Text(badge.name)
-                .font(.caption2)
-                .lineLimit(1)
+            if badge.showName {
+                Text(badge.name)
+                    .font(.caption2)
+                    .lineLimit(1)
+            }
 
             if let state = badge.state {
                 EntityStateText(state: state)

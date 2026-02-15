@@ -6,8 +6,6 @@
 	<array>
 		<string>group.com.hawatch</string>
 	</array>
-	<key>com.apple.developer.ubiquity-kvstore-identifier</key>
-	<string>$(TeamIdentifierPrefix)com.hawatch</string>
 	<key>keychain-access-groups</key>
 	<array>
 		<string>$(AppIdentifierPrefix)com.hawatch</string>

@@ -52,9 +52,11 @@ final class SettingsManager {
             try? KeychainService.save(key: "accessToken", value: settings.accessToken)
         }
 
-        // Save non-sensitive settings to UserDefaults
+        // Save settings to UserDefaults (token stripped in release builds)
         var settingsForDefaults = settings
-        settingsForDefaults.accessToken = "" // Don't store token in UserDefaults
+        #if !DEBUG
+        settingsForDefaults.accessToken = "" // Don't store token in UserDefaults in release
+        #endif
         if let data = try? JSONEncoder().encode(settingsForDefaults) {
             defaults.set(data, forKey: settingsKey)
         }
@@ -63,8 +65,9 @@ final class SettingsManager {
         syncToCloudKit(settings)
     }
 
-    func updateDefaultDashboard(id: String?, viewPath: String? = nil) {
-        appSettings.defaultDashboardId = id
+    func updateDefaultView(dashboardId: String?, viewTitle: String? = nil, viewPath: String? = nil) {
+        appSettings.defaultDashboardId = dashboardId
+        appSettings.defaultViewTitle = viewTitle
         appSettings.defaultViewPath = viewPath
         save(appSettings)
     }
@@ -97,11 +100,14 @@ final class SettingsManager {
     // MARK: - CloudKit (NSUbiquitousKeyValueStore)
 
     private func syncToCloudKit(_ settings: AppSettings) {
-        #if canImport(UIKit)
+        #if os(iOS)
         let store = NSUbiquitousKeyValueStore.default
         store.set(settings.serverURL, forKey: "serverURL")
         if let dashboardId = settings.defaultDashboardId {
             store.set(dashboardId, forKey: "defaultDashboardId")
+        }
+        if let viewTitle = settings.defaultViewTitle {
+            store.set(viewTitle, forKey: "defaultViewTitle")
         }
         if let viewPath = settings.defaultViewPath {
             store.set(viewPath, forKey: "defaultViewPath")
@@ -113,7 +119,7 @@ final class SettingsManager {
     }
 
     private func restoreFromCloudKit() {
-        #if canImport(UIKit)
+        #if os(iOS)
         guard !appSettings.isConfigured else { return }
 
         let store = NSUbiquitousKeyValueStore.default
@@ -122,6 +128,9 @@ final class SettingsManager {
         }
         if let dashboardId = store.string(forKey: "defaultDashboardId") {
             appSettings.defaultDashboardId = dashboardId
+        }
+        if let viewTitle = store.string(forKey: "defaultViewTitle") {
+            appSettings.defaultViewTitle = viewTitle
         }
         if let viewPath = store.string(forKey: "defaultViewPath") {
             appSettings.defaultViewPath = viewPath
@@ -133,7 +142,7 @@ final class SettingsManager {
     }
 
     private func observeCloudKit() {
-        #if canImport(UIKit)
+        #if os(iOS)
         NotificationCenter.default.addObserver(
             forName: NSUbiquitousKeyValueStore.didChangeExternallyNotification,
             object: NSUbiquitousKeyValueStore.default,

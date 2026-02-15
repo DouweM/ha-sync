@@ -114,7 +114,8 @@ public struct BadgeRenderer: Sendable {
             name: name,
             state: state,
             entityId: badge.entity,
-            entityPictureURL: pictureURL
+            entityPictureURL: pictureURL,
+            showName: badge.showName ?? true
         )
     }
 
@@ -141,6 +142,7 @@ public struct BadgeRenderer: Sendable {
 
         let showIcon = badge.showIcon ?? true
         let showState = badge.showState ?? true
+        let showName = badge.showName ?? true
 
         let iconName: String? = showIcon ? iconMapper.sfSymbolName(
             for: badge.icon ?? entityState.icon,
@@ -169,7 +171,8 @@ public struct BadgeRenderer: Sendable {
             iconName: iconName,
             name: displayName,
             state: formatted,
-            entityId: entityId
+            entityId: entityId,
+            showName: showName
         )
     }
 }

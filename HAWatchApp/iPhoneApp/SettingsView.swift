@@ -1,111 +1,187 @@
 import SwiftUI
 import HAWatchCore
 
-struct iPhoneSettingsView: View {
-    @State private var serverURL = ""
-    @State private var accessToken = ""
-    @State private var isValidating = false
-    @State private var validationResult: String?
-    @State private var isConnected = false
+struct CompanionSettingsView: View {
+    @Environment(SettingsManager.self) private var settings
+
+    @State private var connectionStatus: String?
+    @State private var isCheckingConnection = false
+    @State private var showDisconnectConfirmation = false
+
+    private var isConfigured: Bool {
+        settings.appSettings.isConfigured
+    }
 
     var body: some View {
         NavigationStack {
             Form {
-                Section("Home Assistant Connection") {
-                    TextField("Server URL", text: $serverURL)
-                        .textContentType(.URL)
-                        .autocorrectionDisabled()
-                        .textInputAutocapitalization(.never)
-                        .keyboardType(.URL)
-
-                    SecureField("Long-Lived Access Token", text: $accessToken)
-                        .textContentType(.password)
+                connectionSection
+                if isConfigured {
+                    watchAppSection
+                    watchSection
                 }
-
-                Section {
-                    Button {
-                        Task { await validateAndSave() }
-                    } label: {
-                        HStack {
-                            Text("Connect & Sync to Watch")
-                            Spacer()
-                            if isValidating {
-                                ProgressView()
-                            } else if isConnected {
-                                Image(systemName: "checkmark.circle.fill")
-                                    .foregroundStyle(.green)
-                            }
-                        }
-                    }
-                    .disabled(serverURL.isEmpty || accessToken.isEmpty || isValidating)
-                }
-
-                if let result = validationResult {
-                    Section {
-                        Text(result)
-                            .font(.callout)
-                            .foregroundStyle(isConnected ? .green : .red)
-                    }
-                }
-
-                if isConnected {
-                    Section("Default Dashboard") {
-                        NavigationLink("Choose Dashboard") {
-                            DashboardPickerView(
-                                serverURL: serverURL,
-                                accessToken: accessToken
-                            ) { dashboardId in
-                                SettingsManager.shared.updateDefaultDashboard(id: dashboardId)
-                            }
-                        }
-                    }
-
-                    Section("Watch Complications") {
-                        NavigationLink("Configure Complications") {
-                            ComplicationConfigView(
-                                serverURL: serverURL,
-                                accessToken: accessToken
-                            ) { entities in
-                                SettingsManager.shared.updateComplicationEntities(entities)
-                            }
-                        }
-                    }
-                }
+                aboutSection
             }
             .navigationTitle("HA Watch")
+            .task(id: settings.appSettings.serverURL) {
+                await checkConnection()
+            }
         }
     }
 
-    private func validateAndSave() async {
-        isValidating = true
-        validationResult = nil
-        isConnected = false
+    // MARK: - Connection
 
-        guard let url = URL(string: serverURL) else {
-            validationResult = "Invalid URL format"
-            isValidating = false
+    @ViewBuilder
+    private var connectionSection: some View {
+        Section("Connection") {
+            if isConfigured {
+                HStack {
+                    Label {
+                        VStack(alignment: .leading) {
+                            Text(settings.appSettings.serverURL)
+                                .font(.body)
+                            if let status = connectionStatus {
+                                Text(status)
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+                    } icon: {
+                        if isCheckingConnection {
+                            ProgressView()
+                        } else if connectionStatus != nil {
+                            Image(systemName: "checkmark.circle.fill")
+                                .foregroundStyle(.green)
+                        } else {
+                            Image(systemName: "exclamationmark.triangle.fill")
+                                .foregroundStyle(.orange)
+                        }
+                    }
+                }
+
+                NavigationLink("Edit Connection") {
+                    ConnectionFormView()
+                }
+            } else {
+                NavigationLink {
+                    ConnectionFormView()
+                } label: {
+                    Label("Connect to Home Assistant", systemImage: "house.fill")
+                }
+            }
+        }
+    }
+
+    // MARK: - Watch App
+
+    @ViewBuilder
+    private var watchAppSection: some View {
+        Section("Watch App") {
+            NavigationLink {
+                DefaultViewPickerView()
+            } label: {
+                HStack {
+                    Label("Default View", systemImage: "square.grid.2x2")
+                    Spacer()
+                    if let title = settings.appSettings.defaultViewTitle ?? settings.appSettings.defaultDashboardId {
+                        Text(title)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+            }
+
+            NavigationLink {
+                ComplicationConfigView()
+            } label: {
+                HStack {
+                    Label("Complications", systemImage: "watchface.applewatch.case")
+                    Spacer()
+                    let count = settings.appSettings.complicationEntities.count
+                    if count > 0 {
+                        Text("\(count) entities")
+                            .foregroundStyle(.secondary)
+                    }
+                }
+            }
+        }
+    }
+
+    // MARK: - Watch
+
+    @ViewBuilder
+    private var watchSection: some View {
+        Section("Watch") {
+            WatchStatusView()
+        }
+    }
+
+    // MARK: - About
+
+    @ViewBuilder
+    private var aboutSection: some View {
+        Section("About") {
+            HStack {
+                Text("Version")
+                Spacer()
+                Text(Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0")
+                    .foregroundStyle(.secondary)
+            }
+
+            if isConfigured {
+                Button("Disconnect", role: .destructive) {
+                    showDisconnectConfirmation = true
+                }
+                .confirmationDialog(
+                    "Disconnect from Home Assistant?",
+                    isPresented: $showDisconnectConfirmation,
+                    titleVisibility: .visible
+                ) {
+                    Button("Disconnect", role: .destructive) {
+                        disconnect()
+                    }
+                } message: {
+                    Text("This will clear your saved connection settings. You can reconnect at any time.")
+                }
+            }
+        }
+    }
+
+    // MARK: - Actions
+
+    private func checkConnection() async {
+        guard let url = settings.appSettings.baseURL else {
+            connectionStatus = nil
             return
         }
+        isCheckingConnection = true
 
-        let client = HAAPIClient(baseURL: url, token: accessToken)
+        let client = HAAPIClient(baseURL: url, token: settings.appSettings.accessToken)
         do {
             let config = try await client.validateConnection()
-            isConnected = true
-            validationResult = "Connected to \(config.locationName ?? "Home Assistant") (v\(config.version ?? "?"))"
-
-            // Send settings to Watch via WatchConnectivity
-            let settings = AppSettings(
-                serverURL: serverURL,
-                accessToken: accessToken
-            )
-            SettingsManager.shared.save(settings)
-            #if canImport(WatchConnectivity)
-            WatchConnectivityManager.shared.sendSettings(settings)
-            #endif
+            connectionStatus = "Connected to \(config.locationName ?? "Home Assistant")"
         } catch {
-            validationResult = "Connection failed: \(error.localizedDescription)"
+            connectionStatus = nil
         }
 
-        isValidating = false
+        isCheckingConnection = false
+
+        // Backfill view title if missing
+        if settings.appSettings.defaultDashboardId != nil,
+           settings.appSettings.defaultViewTitle == nil {
+            if let dashboards = try? await client.fetchDashboardList(),
+               let match = dashboards.first(where: { $0.urlPath == settings.appSettings.defaultDashboardId }) {
+                settings.updateDefaultView(
+                    dashboardId: match.urlPath,
+                    viewTitle: match.title,
+                    viewPath: settings.appSettings.defaultViewPath
+                )
+            }
+        }
+    }
+
+    private func disconnect() {
+        connectionStatus = nil
+        settings.save(AppSettings())
+        KeychainService.delete(key: "accessToken")
     }
 }
