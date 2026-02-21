@@ -36,16 +36,10 @@ class AutomationSyncer(BaseSyncer):
     async def get_remote_entities(self) -> dict[str, dict[str, Any]]:
         """Get all automations from Home Assistant."""
         with logfire.span("Fetch remote automations"):
-            automations = await self.client.get_automations()
+            automation_ids = await self.client.get_automations()
             result: dict[str, dict[str, Any]] = {}
 
-            for automation in automations:
-                # The internal ID is in attributes, not the entity_id suffix
-                auto_id = automation.get("attributes", {}).get("id")
-                if not auto_id:
-                    continue
-
-                # Get full config using the internal ID
+            for auto_id in automation_ids:
                 config = await self.client.get_automation_config(auto_id)
                 if config:
                     result[auto_id] = config

@@ -96,6 +96,10 @@ def mock_ha_client() -> HAClient:
     client._update_helper = AsyncMock()
     client._delete_helper = AsyncMock()
 
+    # Entity registry methods
+    client.get_entity_registry = AsyncMock(return_value=[])
+    client.get_entity_registry_cached = AsyncMock(return_value=[])
+
     # Connection methods
     client.connect = AsyncMock()
     client.disconnect = AsyncMock()

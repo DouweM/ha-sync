@@ -56,7 +56,7 @@ class TestAutomationSyncerDiff:
 
         # Remote has the automation with different content
         mock_ha_client.get_automations.return_value = [
-            SampleAutomation.create_state("existing", "Original Alias")
+            "existing"
         ]
         mock_ha_client.get_automation_config.return_value = SampleAutomation.create(
             auto_id="existing",
@@ -81,7 +81,7 @@ class TestAutomationSyncerDiff:
         # No local automations
         # Remote has an automation
         mock_ha_client.get_automations.return_value = [
-            SampleAutomation.create_state("remote_only", "Remote Only")
+            "remote_only"
         ]
         mock_ha_client.get_automation_config.return_value = SampleAutomation.create(
             auto_id="remote_only",
@@ -115,7 +115,7 @@ class TestAutomationSyncerDiff:
         )
 
         mock_ha_client.get_automations.return_value = [
-            SampleAutomation.create_state("unchanged", "Unchanged Automation")
+            "unchanged"
         ]
         mock_ha_client.get_automation_config.return_value = auto_config
 
@@ -287,7 +287,7 @@ class TestAutomationSyncerPush:
 
         # Remote only knows about auto_a
         mock_ha_client.get_automations.return_value = [
-            SampleAutomation.create_state("auto_a", "Auto A")
+            "auto_a"
         ]
         mock_ha_client.get_automation_config.return_value = SampleAutomation.create(
             auto_id="auto_a",
@@ -357,7 +357,7 @@ class TestAutomationSyncerPull:
     ) -> None:
         """Test that pull creates files for remote automations."""
         mock_ha_client.get_automations.return_value = [
-            SampleAutomation.create_state("remote_auto", "Remote Auto")
+            "remote_auto"
         ]
         mock_ha_client.get_automation_config.return_value = SampleAutomation.create(
             auto_id="remote_auto",
@@ -383,7 +383,7 @@ class TestAutomationSyncerPull:
     ) -> None:
         """Test that pull dry_run doesn't create files."""
         mock_ha_client.get_automations.return_value = [
-            SampleAutomation.create_state("remote_auto", "Remote Auto")
+            "remote_auto"
         ]
         mock_ha_client.get_automation_config.return_value = SampleAutomation.create(
             auto_id="remote_auto",
@@ -429,7 +429,7 @@ class TestAutomationSyncerDiffItemsIntegration:
 
         # Remote has one automation (to_modify) with different content
         mock_ha_client.get_automations.return_value = [
-            SampleAutomation.create_state("to_modify", "Original Version")
+            "to_modify"
         ]
         mock_ha_client.get_automation_config.return_value = SampleAutomation.create(
             auto_id="to_modify",
