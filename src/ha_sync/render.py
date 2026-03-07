@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Any
 
 import yaml
+from rich.cells import cell_len
 from rich.console import Console
 from rich.text import Text
 
@@ -118,9 +119,9 @@ ICON_EMOJI = {
     "heating-coil": "🔥",
     "video": "📹",
     "video-off": "📹",
-    "baby-buggy": "👩‍🍼",
-    "baby-carriage": "👩‍🍼",
-    "stroller": "👩‍🍼",
+    "baby-buggy": "🍼",
+    "baby-carriage": "🍼",
+    "stroller": "🍼",
     "face-man": "👨",
     "face-woman": "👩",
     "face": "👤",
@@ -397,6 +398,17 @@ class ViewRenderer:
 
         return True
 
+    @staticmethod
+    def pad_emoji(emoji: str, target_width: int = 2) -> str:
+        """Pad emoji to consistent terminal cell width.
+
+        Many emojis (especially those with FE0F variation selectors or ZWJ
+        sequences) have cell_len that doesn't match their actual terminal
+        rendering width. This pads to a target width for consistent alignment.
+        """
+        padding = max(0, target_width - cell_len(emoji))
+        return emoji + " " * padding
+
     def get_icon_emoji(self, icon: str | None, entity_id: str | None = None) -> str:
         """Convert MDI icon to emoji."""
         if not icon and entity_id:
@@ -546,7 +558,7 @@ class ViewRenderer:
 
             text = Text()
             if emoji:
-                text.append(f"{emoji} ")
+                text.append(f"{self.pad_emoji(emoji)} ")
             text.append(f"{display_name}")
 
             if state_content != "name" and show_state:
@@ -567,7 +579,7 @@ class ViewRenderer:
 
             text = Text()
             emoji = self.get_icon_emoji(icon, entity_id)
-            text.append(f"{emoji} ")
+            text.append(f"{self.pad_emoji(emoji)} ")
 
             if content:
                 rendered = await self.eval_template(content)
@@ -607,7 +619,7 @@ class ViewRenderer:
         formatted, style = self.format_state(entity_id, state)
 
         text = Text()
-        text.append(f"  {emoji} {name}")
+        text.append(f"  {self.pad_emoji(emoji)} {name}")
         if formatted:
             text.append(": ")
             text.append(formatted, style=style)
@@ -631,7 +643,7 @@ class ViewRenderer:
 
         header = Text()
         if emoji:
-            header.append(f"{emoji} ")
+            header.append(f"{self.pad_emoji(emoji)} ")
         header.append(heading.upper(), style="bold")
         lines.append(header)
 
@@ -796,7 +808,7 @@ class ViewRenderer:
             emoji = self.get_icon_emoji(icon, entity_id)
 
             text = Text()
-            text.append(f"  {emoji} {name}")
+            text.append(f"  {self.pad_emoji(emoji)} {name}")
             if formatted_state:
                 text.append(": ")
                 text.append(formatted_state, style=style)
@@ -979,7 +991,7 @@ class ViewRenderer:
         emoji = self.get_icon_emoji(icon)
 
         header = Text()
-        header.append(f"═══ {emoji} ", style="bold")
+        header.append(f"═══ {self.pad_emoji(emoji)} ", style="bold")
         header.append(title.upper(), style="bold cyan")
         header.append(" ═══", style="bold")
         console.print(header)
