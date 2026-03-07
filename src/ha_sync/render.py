@@ -167,6 +167,7 @@ ICON_EMOJI = {
     "account-multiple": "👥",
     "bed": "🛏️",
     "bed-outline": "🛏️",
+    "car-sports": "🏎️",
 }
 
 DOMAIN_EMOJI = {
