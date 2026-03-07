@@ -985,15 +985,6 @@ class HAClient:
 
     # --- State Methods ---
 
-    @logfire.instrument("Get all states")
-    async def get_all_states(self) -> list[dict[str, Any]]:
-        """Get all entity states."""
-        response = await self.http.get(
-            "/api/states", timeout=httpx.Timeout(30.0, read=120.0)
-        )
-        self._check_response(response)
-        return response.json()
-
     @logfire.instrument("Get entity state: {entity_id}")
     async def get_entity_state(self, entity_id: str) -> dict[str, Any] | None:
         """Get state for a specific entity."""

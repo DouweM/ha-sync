@@ -1483,51 +1483,75 @@ async def _search(
     import fnmatch
 
     async with HAClient(config.url, config.token) as client:
-        all_states = await client.get_all_states()
+        # Use entity registry (fast WebSocket call) instead of /api/states
+        all_entities = await client.get_entity_registry_cached()
 
         # Filter by domain
         if domain:
-            all_states = [s for s in all_states if s["entity_id"].startswith(f"{domain}.")]
+            all_entities = [
+                e for e in all_entities if e["entity_id"].startswith(f"{domain}.")
+            ]
 
-        # Filter by state
-        if state_filter:
-            all_states = [s for s in all_states if s.get("state") == state_filter]
-
-        # Filter by query (matches entity_id or friendly_name)
+        # Filter by query (matches entity_id or name)
         query_lower = query.lower()
-        # Check if query is a glob pattern
         is_glob = "*" in query or "?" in query
 
         matches = []
-        for entity in all_states:
+        for entity in all_entities:
             entity_id = entity["entity_id"]
-            friendly_name = entity.get("attributes", {}).get("friendly_name", "")
+            name = entity.get("name") or entity.get("original_name") or ""
 
             if is_glob:
-                # Glob pattern matching
                 if fnmatch.fnmatch(entity_id.lower(), query_lower) or fnmatch.fnmatch(
-                    friendly_name.lower(), query_lower
+                    name.lower(), query_lower
                 ):
                     matches.append(entity)
             else:
-                # Substring matching
-                if query_lower in entity_id.lower() or query_lower in friendly_name.lower():
+                if query_lower in entity_id.lower() or query_lower in name.lower():
                     matches.append(entity)
 
         if not matches:
             console.print("[dim]No entities found[/dim]")
             return
 
-        # Display results
-        table = Table(title=f"Found {len(matches)} entities")
-        table.add_column("Entity ID", style="cyan")
-        table.add_column("State")
-        table.add_column("Name", style="dim")
+        # Fetch states only for matched entities (in parallel)
+        async def get_state(entity: dict) -> tuple[dict, dict | None]:
+            state = await client.get_entity_state(entity["entity_id"])
+            return entity, state
 
-        for entity in sorted(matches, key=lambda e: e["entity_id"]):
+        results = await asyncio.gather(*[get_state(e) for e in matches])
+
+        # Filter by state if requested
+        if state_filter:
+            results = [
+                (e, s) for e, s in results if s and s.get("state") == state_filter
+            ]
+
+        if not results:
+            console.print("[dim]No entities found[/dim]")
+            return
+
+        # Display results
+        table = Table(title=f"Found {len(results)} entities")
+        table.add_column("Entity ID", style="cyan", no_wrap=True)
+        table.add_column("State", no_wrap=True)
+        table.add_column("Name", style="dim", no_wrap=True)
+        table.add_column("Attrs", style="dim", no_wrap=True, justify="right")
+
+        _HIDDEN_ATTR_KEYS = {"friendly_name", "icon", "entity_picture"}
+
+        for entity, state in sorted(results, key=lambda r: r[0]["entity_id"]):
             entity_id = entity["entity_id"]
-            state_val = entity.get("state", "")
-            friendly_name = entity.get("attributes", {}).get("friendly_name", "")
+            name = entity.get("name") or entity.get("original_name") or ""
+            state_val = state.get("state", "") if state else ""
+            friendly_name = (
+                state.get("attributes", {}).get("friendly_name", "") if state else name
+            )
+            attr_keys = sorted(
+                k
+                for k in (state.get("attributes", {}) if state else {})
+                if k not in _HIDDEN_ATTR_KEYS
+            )
 
             # Color state based on value
             if state_val in ("on", "home", "playing", "open"):
@@ -1539,7 +1563,12 @@ async def _search(
             else:
                 state_display = state_val
 
-            table.add_row(entity_id, state_display, friendly_name)
+            table.add_row(
+                entity_id,
+                state_display,
+                friendly_name or name,
+                str(len(attr_keys)) if attr_keys else "",
+            )
 
         console.print(table)
 
