@@ -263,44 +263,48 @@ class ViewRenderer:
                 self.extract_entities(item, entities)
 
     async def fetch_all_states(self, entities: set[str]) -> None:
-        """Fetch all entity states in a single template call."""
+        """Fetch all entity states in batched template calls."""
         if not entities:
             return
 
         entity_list = list(entities)
-        lines = []
-        for e in entity_list:
-            lines.append(
-                f'{e}|||{{{{ states("{e}") }}}}|||'
-                f'{{{{ state_attr("{e}", "friendly_name") '
-                f'| default("", true) | replace("\\n", " ") }}}}|||'
-                f'{{{{ state_attr("{e}", "unit_of_measurement") | default("", true) }}}}|||'
-                f'{{{{ state_attr("{e}", "icon") | default("", true) }}}}|||'
-                f'{{{{ state_attr("{e}", "device_class") | default("", true) }}}}'
-            )
+        batch_size = 20
 
-        template = "\n".join(lines)
+        for i in range(0, len(entity_list), batch_size):
+            batch = entity_list[i : i + batch_size]
+            lines = []
+            for e in batch:
+                lines.append(
+                    f'{e}|||{{{{ states("{e}") }}}}|||'
+                    f'{{{{ state_attr("{e}", "friendly_name") '
+                    f'| default("", true) | replace("\\n", " ") }}}}|||'
+                    f'{{{{ state_attr("{e}", "unit_of_measurement") | default("", true) }}}}|||'
+                    f'{{{{ state_attr("{e}", "icon") | default("", true) }}}}|||'
+                    f'{{{{ state_attr("{e}", "device_class") | default("", true) }}}}'
+                )
 
-        try:
-            output = await self.client.render_template(template)
-            for line in output.strip().split("\n"):
-                parts = line.split("|||")
-                if len(parts) >= 3:
-                    entity_id = parts[0].strip()
-                    state = parts[1].strip() if len(parts) > 1 else ""
-                    name = parts[2].strip() if len(parts) > 2 else ""
-                    unit = parts[3].strip() if len(parts) > 3 else ""
-                    icon = parts[4].strip() if len(parts) > 4 else ""
-                    device_class = parts[5].strip() if len(parts) > 5 else ""
-                    self.state_cache[entity_id] = {
-                        "state": state,
-                        "name": name,
-                        "unit": unit,
-                        "icon": icon,
-                        "device_class": device_class,
-                    }
-        except Exception as e:
-            console.print(f"[dim]Warning: Failed to batch fetch states: {e}[/dim]")
+            template = "\n".join(lines)
+
+            try:
+                output = await self.client.render_template(template)
+                for line in output.strip().split("\n"):
+                    parts = line.split("|||")
+                    if len(parts) >= 3:
+                        entity_id = parts[0].strip()
+                        state = parts[1].strip() if len(parts) > 1 else ""
+                        name = parts[2].strip() if len(parts) > 2 else ""
+                        unit = parts[3].strip() if len(parts) > 3 else ""
+                        icon = parts[4].strip() if len(parts) > 4 else ""
+                        device_class = parts[5].strip() if len(parts) > 5 else ""
+                        self.state_cache[entity_id] = {
+                            "state": state,
+                            "name": name,
+                            "unit": unit,
+                            "icon": icon,
+                            "device_class": device_class,
+                        }
+            except Exception as e:
+                console.print(f"[dim]Warning: Failed to fetch states for batch: {e}[/dim]")
 
     def get_state(self, entity_id: str) -> str:
         """Get current state of an entity from cache."""
