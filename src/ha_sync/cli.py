@@ -1,9 +1,10 @@
 """CLI interface for ha-sync."""
 
 import asyncio
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Any
 
 import logfire
 import typer
@@ -28,11 +29,9 @@ from ha_sync.sync.config_entries import (
     ConfigEntrySyncer,
     discover_helper_domains,
 )
+from ha_sync.sync.three_way import ThreeWayDiffItem, ThreeWayDiffResult, compute_three_way_diff
 from ha_sync.utils import (
-    MANAGED_FOLDERS,
     dump_yaml,
-    git_stash,
-    git_stash_pop,
     is_git_repo,
 )
 
@@ -863,55 +862,6 @@ def _ask_confirmation(action: str = "proceed") -> bool:
         return False
 
 
-def _handle_autostash(skip_stash: bool) -> tuple[bool, bool]:
-    """Handle git autostash if in a git repo.
-
-    Only stashes changes in ha-sync managed folders (automations, scripts, etc.).
-
-    Args:
-        skip_stash: If True, skip stashing entirely
-
-    Returns:
-        Tuple of (is_git, stashed) - whether we're in git and whether we stashed
-    """
-    if skip_stash:
-        return False, False
-
-    if not is_git_repo():
-        return False, False
-
-    stash_result = git_stash(MANAGED_FOLDERS)
-    if stash_result.stashed:
-        console.print("[dim]Stashed local changes in managed folders[/dim]")
-        return True, True
-    return True, False
-
-
-def _handle_stash_pop(stashed: bool) -> bool:
-    """Pop stashed changes and check for conflicts.
-
-    Args:
-        stashed: Whether we previously stashed
-
-    Returns:
-        True if successful (no conflicts), False if conflicts detected
-    """
-    if not stashed:
-        return True
-
-    pop_result = git_stash_pop()
-    if pop_result.success:
-        console.print("[dim]Restored stashed changes[/dim]")
-        return True
-
-    if pop_result.has_conflicts:
-        console.print("[yellow]Conflicts detected after restoring stashed changes.[/yellow]")
-        console.print("[yellow]Resolve conflicts before pushing.[/yellow]")
-        return False
-
-    console.print(f"[red]Error restoring stash:[/red] {pop_result.message}")
-    return False
-
 
 @app.command()
 def pull(
@@ -925,7 +875,7 @@ def pull(
     ] = False,
     yes: Annotated[
         bool,
-        typer.Option("--yes", "-y", help="Skip confirmation and autostash"),
+        typer.Option("--yes", "-y", help="Skip confirmation"),
     ] = False,
     dry_run: Annotated[
         bool,
@@ -934,9 +884,9 @@ def pull(
 ) -> None:
     """Pull entities from Home Assistant to local files.
 
-    Shows a preview of changes. In a git repo, automatically stashes local changes
-    before pull and restores after (no confirmation needed). Outside git, asks for
-    confirmation since local changes can't be recovered.
+    In a git repo, uses three-way diff to only write remote-changed entities,
+    leaving local-only changes untouched (no stashing needed).
+    Outside git, falls back to two-way diff and asks for confirmation.
     """
     with logfire.span("ha-sync pull", paths=paths, dry_run=dry_run, yes=yes):
         config = get_config()
@@ -944,143 +894,116 @@ def pull(
             console.print("[red]Missing HA_URL or HA_TOKEN.[/red] Set them in .env file.")
             raise typer.Exit(1)
 
-        if dry_run:
-            console.print("[cyan]Dry run mode - no changes will be made[/cyan]\n")
-            asyncio.run(_pull(config, paths, sync_deletions, dry_run=True))
-            return
-
-        # Get diff preview
-        console.print("[bold]Fetching changes from Home Assistant...[/bold]\n")
-        diff_items = asyncio.run(_get_pull_diff(config, paths, sync_deletions))
-
-        if not diff_items:
-            console.print("[dim]No changes to pull[/dim]")
-            return
-
-        # Show preview
-        _display_diff_items(diff_items, direction="pull")
-
         in_git = is_git_repo()
 
-        if not in_git:
-            # Not in git - ask for confirmation since we can't recover overwritten files
+        if in_git:
+            # Three-way pull: only writes remote-changed entities
+            asyncio.run(
+                _pull_three_way(config, paths, sync_deletions, dry_run=dry_run, yes=yes)
+            )
+        else:
+            # Two-way pull: old behavior (confirmation needed)
+            if dry_run:
+                console.print("[cyan]Dry run mode - no changes will be made[/cyan]\n")
+                asyncio.run(_pull(config, paths, sync_deletions, dry_run=True))
+                return
+
+            console.print("[bold]Fetching changes from Home Assistant...[/bold]\n")
+            diff_items = asyncio.run(_get_pull_diff(config, paths, sync_deletions))
+
+            if not diff_items:
+                console.print("[dim]No changes to pull[/dim]")
+                return
+
+            _display_diff_items(diff_items, direction="pull")
+
             if not yes and not _ask_confirmation("pull these changes"):
                 console.print("[dim]Aborted[/dim]")
                 raise typer.Exit(0)
+
             console.print()
             asyncio.run(_pull(config, paths, sync_deletions, dry_run=False))
-        else:
-            # In git - autostash handles recovery, no confirmation needed
-            _, stashed = _handle_autostash(skip_stash=yes)
-            console.print()
-            asyncio.run(_pull(config, paths, sync_deletions, dry_run=False))
-            _handle_stash_pop(stashed)
 
 
-async def _get_sync_diffs(
+async def _pull_three_way(
     config: SyncConfig,
     paths: list[str] | None,
     sync_deletions: bool,
-    in_git: bool,
-    has_local_changes: bool,
-) -> tuple[list[DiffItem], list[DiffItem], dict[str, dict]]:
-    """Get both pull and push diffs efficiently with single API fetch.
+    dry_run: bool = False,
+    yes: bool = False,
+) -> None:
+    """Three-way pull: only write remote-changed entities, leave local-only alone."""
+    if dry_run:
+        console.print("[cyan]Dry run mode - no changes will be made[/cyan]\n")
 
-    For accurate pull_diff when there are uncommitted changes, we need to
-    temporarily stash and compute the diff against clean working tree.
-
-    Returns:
-        Tuple of (pull_diff, push_diff, remote_cache)
-    """
-    push_diff: list[DiffItem] = []
-    pull_diff: list[DiffItem] = []
+    console.print("[bold]Fetching changes from Home Assistant...[/bold]\n")
 
     async with HAClient(config.url, config.token) as client:
         syncers_with_filters = await get_syncers_for_paths(client, config, paths)
 
-        # Cache remote data for all syncers (single API fetch per syncer type)
-        remote_cache: dict[str, dict] = {}
-        for syncer, _ in syncers_with_filters:
-            remote_cache[syncer.entity_type] = await syncer.get_remote_entities()
+        any_changes = False
 
-        # Step 1: Compute push_diff (dirty working tree vs remote)
-        if has_local_changes:
-            for syncer, file_filters in syncers_with_filters:
-                remote = remote_cache[syncer.entity_type]
-                syncer_items = await syncer.diff(remote=remote)
+        for syncer, file_filters in syncers_with_filters:
+            base = syncer.get_base_entities()
+            local = syncer.get_local_entities()
+            remote = await syncer.get_remote_entities()
 
-                # Filter for push: adds, modifies, renames; deletes only if sync_deletions
-                push_items = [
-                    item
-                    for item in syncer_items
-                    if item.status in ("renamed", "added", "modified")
-                    or (item.status == "deleted" and sync_deletions)
-                ]
+            norm_fn = _get_normalize_fn(syncer)
+            tw_result = compute_three_way_diff(
+                base, local, remote, syncer.entity_type, normalize_fn=norm_fn,
+            )
 
-                if file_filters:
-                    push_items = [
-                        item
-                        for item in push_items
-                        if item.file_path
-                        and any(_matches_filter(item.file_path, f) for f in file_filters)
-                    ]
-                push_diff.extend(push_items)
+            # For pull, we care about:
+            # - remote_only items (will be pulled)
+            # - conflicts (need resolution)
+            remote_items = tw_result.remote_only
+            conflicts = tw_result.conflicts
 
-        # Step 2: Stash if needed for accurate pull_diff
-        stashed = False
-        if in_git and has_local_changes:
-            stash_result = git_stash(MANAGED_FOLDERS)
-            stashed = stash_result.stashed
+            if file_filters:
+                fp_fn = _get_file_path_fn(syncer)
+                remote_items = _filter_three_way_items(remote_items, file_filters, fp_fn)
+                conflicts = _filter_three_way_items(conflicts, file_filters, fp_fn)
 
-        # Step 3: Compute pull_diff (clean working tree vs remote)
-        try:
-            for syncer, file_filters in syncers_with_filters:
-                remote = remote_cache[syncer.entity_type]
-                syncer_items = await syncer.diff(remote=remote)
+            if not remote_items and not conflicts:
+                continue
 
-                # For pull, flip the perspective:
-                # - "deleted" (remote has, local doesn't) -> "added" (will create locally)
-                # - "modified" stays as-is
-                # - "added" (local has, remote doesn't) -> "deleted" (will delete if sync_deletions)
-                pull_items = []
-                for item in syncer_items:
-                    if item.status == "deleted":
-                        pull_items.append(
-                            DiffItem(
-                                entity_id=item.entity_id,
-                                status="added",
-                                local=item.local,
-                                remote=item.remote,
-                                file_path=item.file_path,
-                            )
-                        )
-                    elif item.status == "modified":
-                        pull_items.append(item)
-                    elif item.status == "added" and sync_deletions:
-                        pull_items.append(
-                            DiffItem(
-                                entity_id=item.entity_id,
-                                status="deleted",
-                                local=item.local,
-                                remote=item.remote,
-                                file_path=item.file_path,
-                            )
-                        )
+            any_changes = True
+            console.print(f"\n[bold]Pulling {syncer.entity_type}s...[/bold]")
 
-                if file_filters:
-                    pull_items = [
-                        item
-                        for item in pull_items
-                        if item.file_path
-                        and any(_matches_filter(item.file_path, f) for f in file_filters)
-                    ]
-                pull_diff.extend(pull_items)
-        finally:
-            # Step 4: Restore stash
-            if stashed:
-                git_stash_pop()
+            # Pull only remote-changed entities
+            if remote_items:
+                # Build a remote dict with only the entities that need pulling
+                remote_to_pull = {
+                    item.entity_id: remote[item.entity_id]
+                    for item in remote_items
+                    if item.entity_id in remote
+                }
+                if remote_to_pull:
+                    result = await syncer.pull(
+                        sync_deletions=sync_deletions,
+                        dry_run=dry_run,
+                        remote=remote_to_pull,
+                    )
+                    if not result.has_changes:
+                        console.print("  [dim]No changes[/dim]")
 
-    return pull_diff, push_diff, remote_cache
+            # Show conflicts
+            if conflicts:
+                console.print(f"\n  [bold red]Conflicts ({len(conflicts)}):[/bold red]")
+                for item in conflicts:
+                    fp = item.file_path or item.entity_id
+                    console.print(
+                        f"    [red]conflict[/red] {fp} "
+                        f"(local: {item.local_status}, remote: {item.remote_status})"
+                    )
+                if not dry_run:
+                    console.print(
+                        "\n  [yellow]Resolve conflicts manually, then push.[/yellow]"
+                    )
+
+        if not any_changes:
+            console.print("[dim]No changes to pull[/dim]")
+
 
 
 async def _get_pull_diff(
@@ -1339,18 +1262,27 @@ def diff(
 
 
 async def _diff(config: SyncConfig, paths: list[str] | None) -> None:
-    """Show differences between local and remote."""
-    import difflib
+    """Show differences between local and remote.
 
-    from ha_sync.utils import dump_yaml
+    Uses three-way diff when in a git repo (base=HEAD, local=disk, remote=HA).
+    Falls back to two-way diff (local vs remote) when not in git.
+    """
+    in_git = is_git_repo()
 
+    if in_git:
+        await _diff_three_way(config, paths)
+    else:
+        await _diff_two_way(config, paths)
+
+
+async def _diff_two_way(config: SyncConfig, paths: list[str] | None) -> None:
+    """Two-way diff: local vs remote (fallback when not in git)."""
     async with HAClient(config.url, config.token) as client:
         syncers_with_filters = await get_syncers_for_paths(client, config, paths)
         all_items: list[tuple[str, DiffItem]] = []
 
         for syncer, file_filters in syncers_with_filters:
             items = await syncer.diff()
-            # Filter items if file_filters is set
             if file_filters:
                 items = [
                     item
@@ -1365,62 +1297,226 @@ async def _diff(config: SyncConfig, paths: list[str] | None) -> None:
             console.print("[dim]No differences[/dim]")
             return
 
-        status_colors = {
-            "added": "green",
-            "modified": "yellow",
-            "deleted": "red",
-            "renamed": "blue",
-        }
-
         for _entity_type_name, item in sorted(all_items, key=lambda x: (x[1].status, x[0])):
-            color = status_colors.get(item.status, "white")
-            display_path = item.file_path or item.entity_id
+            _print_diff_item(item)
 
-            # Header line
-            console.print(f"[{color}]{item.status}[/{color}] {display_path}")
 
-            # Show diff for modified items
-            if item.status == "modified" and item.local and item.remote:
-                local_yaml = dump_yaml(item.local).splitlines(keepends=True)
-                remote_yaml = dump_yaml(item.remote).splitlines(keepends=True)
+async def _diff_three_way(config: SyncConfig, paths: list[str] | None) -> None:
+    """Three-way diff: base (HEAD) vs local (disk) vs remote (HA)."""
+    async with HAClient(config.url, config.token) as client:
+        syncers_with_filters = await get_syncers_for_paths(client, config, paths)
 
-                diff_lines = list(
-                    difflib.unified_diff(
-                        remote_yaml,
-                        local_yaml,
-                        fromfile="remote",
-                        tofile="local",
-                        lineterm="",
-                    )
+        all_local: list[ThreeWayDiffItem] = []
+        all_remote: list[ThreeWayDiffItem] = []
+        all_conflicts: list[ThreeWayDiffItem] = []
+
+        for syncer, file_filters in syncers_with_filters:
+            base = syncer.get_base_entities()
+            local = syncer.get_local_entities()
+            remote = await syncer.get_remote_entities()
+
+            # Get normalize and file_path functions from syncer
+            norm_fn = _get_normalize_fn(syncer)
+            fp_fn = _get_file_path_fn(syncer)
+
+            tw_result = compute_three_way_diff(
+                base, local, remote, syncer.entity_type,
+                normalize_fn=norm_fn,
+                file_path_fn=fp_fn,
+            )
+
+            if file_filters:
+                tw_result = ThreeWayDiffResult(
+                    local_only=_filter_three_way_items(tw_result.local_only, file_filters),
+                    remote_only=_filter_three_way_items(tw_result.remote_only, file_filters),
+                    conflicts=_filter_three_way_items(tw_result.conflicts, file_filters),
                 )
 
-                if diff_lines:
-                    for line in diff_lines:
-                        line = line.rstrip("\n")
-                        if line.startswith("+++") or line.startswith("---"):
-                            console.print(f"[dim]{line}[/dim]")
-                        elif line.startswith("@@"):
-                            console.print(f"[cyan]{line}[/cyan]")
-                        elif line.startswith("+"):
-                            console.print(f"[green]{line}[/green]")
-                        elif line.startswith("-"):
-                            console.print(f"[red]{line}[/red]")
-                        else:
-                            console.print(f"[dim]{line}[/dim]")
+            all_local.extend(tw_result.local_only)
+            all_remote.extend(tw_result.remote_only)
+            all_conflicts.extend(tw_result.conflicts)
 
-            # Show content for added items
-            elif item.status == "added" and item.local:
-                local_yaml = dump_yaml(item.local)
-                for line in local_yaml.splitlines():
-                    console.print(f"[green]+{line}[/green]")
+        if not all_local and not all_remote and not all_conflicts:
+            console.print("[dim]No differences[/dim]")
+            return
 
-            # Show content for deleted items
-            elif item.status == "deleted" and item.remote:
-                remote_yaml = dump_yaml(item.remote)
-                for line in remote_yaml.splitlines():
-                    console.print(f"[red]-{line}[/red]")
+        if all_local:
+            console.print("[bold]Local changes[/bold] (not yet in HA):\n")
+            for item in all_local:
+                _print_three_way_item(item, side="local")
+            console.print()
 
-            console.print()  # Blank line between items
+        if all_remote:
+            console.print("[bold]Remote changes[/bold] (not yet pulled):\n")
+            for item in all_remote:
+                _print_three_way_item(item, side="remote")
+            console.print()
+
+        if all_conflicts:
+            console.print("[bold red]Conflicts[/bold red] (changed on both sides):\n")
+            for item in all_conflicts:
+                _print_three_way_item(item, side="both")
+            console.print()
+
+
+def _get_normalize_fn(
+    syncer: BaseSyncer,
+) -> Callable[[dict[str, Any]], dict[str, Any]] | None:
+    """Get a normalize function for a syncer, if available."""
+    from ha_sync.sync.automations import AutomationSyncer
+    from ha_sync.sync.base import SimpleEntitySyncer
+    from ha_sync.sync.dashboards import DashboardSyncer
+
+    if isinstance(syncer, AutomationSyncer):
+        from ha_sync.models import Automation
+
+        def norm_auto(data: dict[str, Any]) -> dict[str, Any]:
+            clean = {k: v for k, v in data.items() if not k.startswith("_")}
+            return Automation.normalize(clean)
+
+        return norm_auto
+    elif isinstance(syncer, SimpleEntitySyncer):
+
+        def norm_simple(data: dict[str, Any]) -> dict[str, Any]:
+            clean = {k: v for k, v in data.items() if not k.startswith("_")}
+            return syncer.normalize(clean)
+
+        return norm_simple
+    elif isinstance(syncer, DashboardSyncer):
+
+        def norm_dashboard(data: dict[str, Any]) -> dict[str, Any]:
+            if "config" in data:
+                return {"config": syncer._normalize_config(data["config"])}
+            return data
+
+        return norm_dashboard
+    return None
+
+
+def _get_file_path_fn(syncer: BaseSyncer) -> Callable[[str], str | None] | None:
+    """Get a file_path function for a syncer."""
+    from ha_sync.utils import relative_path as rel_path
+
+    def fp(entity_id: str) -> str | None:
+        return rel_path(syncer.local_path / f"{entity_id}.yaml")
+
+    return fp
+
+
+def _filter_three_way_items(
+    items: list[ThreeWayDiffItem],
+    file_filters: list[Path],
+    fp_fn: Callable[[str], str | None] | None = None,
+) -> list[ThreeWayDiffItem]:
+    """Filter three-way diff items by file path filters."""
+    filtered = []
+    for item in items:
+        fp = item.file_path or (fp_fn(item.entity_id) if fp_fn else None)
+        if fp and any(_matches_filter(fp, f) for f in file_filters):
+            filtered.append(item)
+    return filtered
+
+
+def _print_three_way_item(item: ThreeWayDiffItem, side: str) -> None:
+    """Print a three-way diff item."""
+
+    status_colors = {
+        "added": "green",
+        "modified": "yellow",
+        "deleted": "red",
+    }
+
+    display_path = item.file_path or item.entity_id
+
+    if side == "local":
+        status = item.local_status or "unknown"
+        color = status_colors.get(status, "white")
+        console.print(f"  [{color}]{status}[/{color}] {display_path}")
+        if status == "modified" and item.base and item.local:
+            _print_yaml_diff(item.base, item.local, "base", "local")
+        elif status == "added" and item.local:
+            _print_yaml_content(item.local, "+", "green")
+        elif status == "deleted" and item.base:
+            _print_yaml_content(item.base, "-", "red")
+
+    elif side == "remote":
+        status = item.remote_status or "unknown"
+        color = status_colors.get(status, "white")
+        console.print(f"  [{color}]{status}[/{color}] {display_path}")
+        if status == "modified" and item.base and item.remote:
+            _print_yaml_diff(item.base, item.remote, "base", "remote")
+        elif status == "added" and item.remote:
+            _print_yaml_content(item.remote, "+", "green")
+        elif status == "deleted" and item.base:
+            _print_yaml_content(item.base, "-", "red")
+
+    elif side == "both":
+        console.print(
+            f"  [red]conflict[/red] {display_path} "
+            f"(local: {item.local_status}, remote: {item.remote_status})"
+        )
+        if item.local and item.remote:
+            _print_yaml_diff(
+                item.local, item.remote, "local", "remote"
+            )
+
+
+def _print_diff_item(item: DiffItem) -> None:
+    """Print a two-way DiffItem (backward compat)."""
+    status_colors = {
+        "added": "green",
+        "modified": "yellow",
+        "deleted": "red",
+        "renamed": "blue",
+    }
+    color = status_colors.get(item.status, "white")
+    display_path = item.file_path or item.entity_id
+
+    console.print(f"[{color}]{item.status}[/{color}] {display_path}")
+
+    if item.status == "modified" and item.local and item.remote:
+        _print_yaml_diff(item.remote, item.local, "remote", "local")
+    elif item.status == "added" and item.local:
+        _print_yaml_content(item.local, "+", "green")
+    elif item.status == "deleted" and item.remote:
+        _print_yaml_content(item.remote, "-", "red")
+
+    console.print()
+
+
+def _print_yaml_diff(
+    from_data: dict[str, Any], to_data: dict[str, Any], from_label: str, to_label: str
+) -> None:
+    """Print a unified diff between two YAML representations."""
+    import difflib
+
+    from_yaml = dump_yaml(from_data).splitlines(keepends=True)
+    to_yaml = dump_yaml(to_data).splitlines(keepends=True)
+
+    diff_lines = list(
+        difflib.unified_diff(from_yaml, to_yaml, fromfile=from_label, tofile=to_label, lineterm="")
+    )
+
+    if diff_lines:
+        for line in diff_lines:
+            line = line.rstrip("\n")
+            if line.startswith("+++") or line.startswith("---"):
+                console.print(f"[dim]{line}[/dim]")
+            elif line.startswith("@@"):
+                console.print(f"[cyan]{line}[/cyan]")
+            elif line.startswith("+"):
+                console.print(f"[green]{line}[/green]")
+            elif line.startswith("-"):
+                console.print(f"[red]{line}[/red]")
+            else:
+                console.print(f"[dim]{line}[/dim]")
+
+
+def _print_yaml_content(data: dict[str, Any], prefix: str, color: str) -> None:
+    """Print YAML content with a prefix on each line."""
+    yaml_str = dump_yaml(data)
+    for line in yaml_str.splitlines():
+        console.print(f"[{color}]{prefix}{line}[/{color}]")
 
 
 @app.command()
@@ -1700,23 +1796,29 @@ def sync(
     ] = False,
     yes: Annotated[
         bool,
-        typer.Option("--yes", "-y", help="Skip confirmation and autostash"),
+        typer.Option("--yes", "-y", help="Skip confirmation"),
     ] = False,
     dry_run: Annotated[
         bool,
         typer.Option("--dry-run", "-n", help="Show what would be synced without making changes"),
     ] = False,
+    theirs: Annotated[
+        bool,
+        typer.Option("--theirs", help="Resolve conflicts by accepting remote changes"),
+    ] = False,
+    ours: Annotated[
+        bool,
+        typer.Option("--ours", help="Resolve conflicts by keeping local changes"),
+    ] = False,
 ) -> None:
-    """Bidirectional sync: pull from HA, merge local changes, push back.
+    """Bidirectional sync using three-way diff (base=HEAD, local=disk, remote=HA).
 
-    This is the safest way to sync when you have local changes:
-    1. Stashes local changes (if git repo)
-    2. Pulls latest from Home Assistant
-    3. Restores stashed changes (may create conflicts)
-    4. If no conflicts, pushes local changes to Home Assistant
+    Computes what changed locally vs remotely since last commit:
+    - Remote-only changes are pulled (written to disk)
+    - Local-only changes are pushed (sent to HA)
+    - Conflicts (both sides changed) are shown for resolution
 
-    If conflicts are detected after restoring the stash, the command stops
-    and asks you to resolve them manually before pushing.
+    No git stashing is used. Local changes are never overwritten.
     """
     with logfire.span("ha-sync sync", paths=paths, yes=yes, dry_run=dry_run):
         config = get_config()
@@ -1724,135 +1826,187 @@ def sync(
             console.print("[red]Missing HA_URL or HA_TOKEN.[/red] Set them in .env file.")
             raise typer.Exit(1)
 
-        if dry_run:
-            console.print("[cyan]Dry run mode - showing what would be synced[/cyan]\n")
+        if theirs and ours:
+            console.print("[red]Cannot use both --theirs and --ours[/red]")
+            raise typer.Exit(1)
 
-        # Check if we're in a git repo
-        in_git = is_git_repo()
-        if not in_git and not yes and not dry_run:
-            console.print(
-                "[yellow]Warning:[/yellow] Not in a git repo. "
-                "Local changes may be overwritten during pull."
-            )
-            if not _ask_confirmation("continue anyway"):
-                console.print("[dim]Aborted[/dim]")
-                raise typer.Exit(0)
-
-        # Quick check: any uncommitted changes in managed folders?
-        from ha_sync.utils import git_has_changes
-
-        has_local_changes = git_has_changes(MANAGED_FOLDERS) if in_git else True
-
-        # Fetch all diffs in one API call, computing both push and pull diffs
-        # by temporarily stashing if needed
-        console.print("[dim]Fetching remote state...[/dim]")
-        pull_diff, push_diff, remote_cache = asyncio.run(
-            _get_sync_diffs(config, paths, sync_deletions, in_git, has_local_changes)
+        asyncio.run(
+            _sync_three_way(config, paths, sync_deletions, dry_run, yes, theirs, ours)
         )
 
-        # Display remote changes
-        console.print("\n[bold]Remote changes (will be pulled):[/bold]\n")
-        if pull_diff:
-            _display_diff_items(pull_diff, direction="pull")
-        else:
-            console.print("[dim]No remote changes[/dim]\n")
 
-        # Display local changes
-        if has_local_changes:
-            console.print("[bold]Your uncommitted changes (will be pushed after merge):[/bold]\n")
-            if push_diff:
-                _display_diff_items(push_diff, direction="push")
-            else:
-                console.print("[dim]No local changes[/dim]\n")
-        else:
-            console.print("[dim]No uncommitted changes[/dim]\n")
+async def _sync_three_way(
+    config: SyncConfig,
+    paths: list[str] | None,
+    sync_deletions: bool,
+    dry_run: bool,
+    yes: bool,
+    theirs: bool,
+    ours: bool,
+) -> None:
+    """Three-way sync: compute diffs, show preview, execute."""
+    if dry_run:
+        console.print("[cyan]Dry run mode - showing what would be synced[/cyan]\n")
 
-        # If nothing to do, exit early
-        if not pull_diff and not push_diff:
-            console.print("[dim]Everything is in sync[/dim]")
-            return
+    console.print("[dim]Fetching remote state...[/dim]")
 
-        # Dry run stops here
-        if dry_run:
-            console.print("[cyan]Dry run complete - no changes made[/cyan]")
-            return
+    async with HAClient(config.url, config.token) as client:
+        syncers_with_filters = await get_syncers_for_paths(client, config, paths)
 
-        # If only remote changes (no local changes), just pull without confirmation
-        if pull_diff and not push_diff:
-            console.print("[bold]Pulling from Home Assistant...[/bold]")
-            asyncio.run(
-                _pull(config, paths, sync_deletions, dry_run=False, remote_cache=remote_cache)
+        # Collect three-way diffs per syncer
+        syncer_diffs: list[tuple[BaseSyncer, ThreeWayDiffResult, dict[str, dict]]] = []
+
+        for syncer, file_filters in syncers_with_filters:
+            base = syncer.get_base_entities()
+            local = syncer.get_local_entities()
+            remote = await syncer.get_remote_entities()
+
+            norm_fn = _get_normalize_fn(syncer)
+            fp_fn = _get_file_path_fn(syncer)
+            tw_result = compute_three_way_diff(
+                base, local, remote, syncer.entity_type,
+                normalize_fn=norm_fn, file_path_fn=fp_fn,
             )
-            console.print("\n[green]Sync complete![/green]")
-            return
 
-        # Warn about potential conflicts
-        if pull_diff and push_diff:
-            pull_files = {item.file_path for item in pull_diff if item.file_path}
-            push_files = {item.file_path for item in push_diff if item.file_path}
-            overlap = pull_files & push_files
-            if overlap:
-                console.print(
-                    f"[yellow]Note:[/yellow] {len(overlap)} file(s) changed on both sides. "
-                    "May require conflict resolution.\n"
+            # Apply file filters
+            if file_filters:
+                tw_result = ThreeWayDiffResult(
+                    local_only=_filter_three_way_items(tw_result.local_only, file_filters),
+                    remote_only=_filter_three_way_items(tw_result.remote_only, file_filters),
+                    conflicts=_filter_three_way_items(tw_result.conflicts, file_filters),
                 )
 
-        # Ask for confirmation when there are local changes to push
+            syncer_diffs.append((syncer, tw_result, remote))
+
+        # Display preview
+        all_local = [item for _, tw, _ in syncer_diffs for item in tw.local_only]
+        all_remote = [item for _, tw, _ in syncer_diffs for item in tw.remote_only]
+        all_conflicts = [item for _, tw, _ in syncer_diffs for item in tw.conflicts]
+
+        console.print("\n[bold]Remote changes (will be pulled):[/bold]\n")
+        if all_remote:
+            for item in all_remote:
+                _print_three_way_item(item, side="remote")
+        else:
+            console.print("[dim]No remote changes[/dim]")
+
+        console.print("\n[bold]Local changes (will be pushed):[/bold]\n")
+        if all_local:
+            for item in all_local:
+                _print_three_way_item(item, side="local")
+        else:
+            console.print("[dim]No local changes[/dim]")
+
+        if all_conflicts:
+            console.print(f"\n[bold red]Conflicts ({len(all_conflicts)}):[/bold red]\n")
+            for item in all_conflicts:
+                _print_three_way_item(item, side="both")
+            if not theirs and not ours:
+                console.print(
+                    "\n[yellow]Use --theirs to accept remote or --ours to keep local[/yellow]"
+                )
+
+        if not all_local and not all_remote and not all_conflicts:
+            console.print("\n[dim]Everything is in sync[/dim]")
+            return
+
+        # Stop if conflicts and no resolution strategy
+        if all_conflicts and not theirs and not ours and not dry_run:
+            console.print(
+                "\n[red]Cannot sync with unresolved conflicts.[/red] "
+                "Use --theirs or --ours to resolve."
+            )
+            raise typer.Exit(1)
+
+        if dry_run:
+            console.print("\n[cyan]Dry run complete - no changes made[/cyan]")
+            return
+
+        # Ask for confirmation
         if not yes and not _ask_confirmation("proceed with sync"):
             console.print("[dim]Aborted[/dim]")
             raise typer.Exit(0)
 
-        # Step 3: Stash, pull, unstash
-        stashed = False
-        if in_git and not yes:
-            stash_result = git_stash(MANAGED_FOLDERS)
-            if stash_result.stashed:
-                console.print("[dim]Stashed local changes in managed folders[/dim]")
-                stashed = True
+        # Execute sync
+        for syncer, tw_result, remote in syncer_diffs:
+            if not tw_result.has_changes:
+                continue
 
-        # Execute pull (using cached remote data to avoid re-fetching)
-        if pull_diff:
-            console.print("\n[bold]Pulling from Home Assistant...[/bold]")
-            asyncio.run(
-                _pull(config, paths, sync_deletions, dry_run=False, remote_cache=remote_cache)
-            )
+            console.print(f"\n[bold]Syncing {syncer.entity_type}s...[/bold]")
 
-        # Restore stash
-        if stashed:
-            pop_result = git_stash_pop()
-            if not pop_result.success:
-                if pop_result.has_conflicts:
-                    console.print("\n[yellow]Conflicts detected![/yellow]")
-                    console.print(
-                        "Resolve the conflicts in your files, then run "
-                        "[cyan]ha-sync push[/cyan] to push your changes."
+            # Pull remote-only changes
+            if tw_result.remote_only:
+                remote_to_pull = {
+                    item.entity_id: remote[item.entity_id]
+                    for item in tw_result.remote_only
+                    if item.entity_id in remote
+                }
+                if remote_to_pull:
+                    await syncer.pull(
+                        sync_deletions=sync_deletions,
+                        dry_run=False,
+                        remote=remote_to_pull,
                     )
-                    raise typer.Exit(1)
-                else:
-                    console.print(f"[red]Error restoring stash:[/red] {pop_result.message}")
-                    raise typer.Exit(1)
-            console.print("[dim]Restored stashed changes[/dim]")
 
-        # Step 4: Push using pre-computed push_diff (no need to re-fetch)
-        # After stash pop without conflicts, our uncommitted changes are restored,
-        # so the diff should be the same as what we computed in the preview
-        if push_diff:
-            changed_paths = list({item.file_path for item in push_diff if item.file_path})
-            console.print("\n[bold]Pushing to Home Assistant...[/bold]")
-            asyncio.run(
-                _push(
-                    config,
-                    changed_paths,
-                    all_items=False,
-                    sync_deletions=sync_deletions,
-                    dry_run=False,
-                    diff_items=push_diff,
-                )
-            )
-        else:
-            console.print("[dim]No changes to push[/dim]")
+            # Push local-only changes
+            if tw_result.local_only:
+                # Convert ThreeWayDiffItems to DiffItems for push
+                push_items = _three_way_to_diff_items(tw_result.local_only, direction="push")
+                if push_items:
+                    await syncer.push(
+                        sync_deletions=sync_deletions,
+                        dry_run=False,
+                        diff_items=push_items,
+                    )
+
+            # Handle conflicts
+            if tw_result.conflicts:
+                if theirs:
+                    # Accept remote: pull conflicted entities
+                    remote_to_pull = {
+                        item.entity_id: remote[item.entity_id]
+                        for item in tw_result.conflicts
+                        if item.entity_id in remote and item.remote_status != "deleted"
+                    }
+                    if remote_to_pull:
+                        await syncer.pull(
+                            sync_deletions=sync_deletions,
+                            dry_run=False,
+                            remote=remote_to_pull,
+                        )
+                elif ours:
+                    # Keep local: push local versions
+                    push_items = _three_way_to_diff_items(tw_result.conflicts, direction="push")
+                    if push_items:
+                        await syncer.push(
+                            sync_deletions=sync_deletions,
+                            dry_run=False,
+                            diff_items=push_items,
+                        )
 
         console.print("\n[green]Sync complete![/green]")
+
+
+def _three_way_to_diff_items(
+    items: list[ThreeWayDiffItem], direction: str
+) -> list[DiffItem]:
+    """Convert ThreeWayDiffItems to DiffItems for push/pull operations."""
+    result: list[DiffItem] = []
+    for item in items:
+        status = item.local_status if direction == "push" else item.remote_status
+
+        if status is None:
+            continue
+
+        result.append(DiffItem(
+            entity_id=item.entity_id,
+            status=status,
+            entity_type=item.entity_type,
+            local=item.local,
+            remote=item.remote,
+            file_path=item.file_path,
+        ))
+    return result
 
 
 @app.command()
@@ -1865,23 +2019,34 @@ def render(
         str | None,
         typer.Option("--user", "-u", help="View as specific user (e.g., douwe)"),
     ] = None,
+    output: Annotated[
+        str,
+        typer.Option("--output", "-o", help="Output format: rich (default) or swiftbar"),
+    ] = "rich",
 ) -> None:
     """Render a Lovelace dashboard view as CLI text."""
-    with logfire.span("ha-sync render", view_path=str(view_path), user=user):
+    with logfire.span("ha-sync render", view_path=str(view_path), user=user, output=output):
         config = get_config()
         if not config.url or not config.token:
             console.print("[red]Missing HA_URL or HA_TOKEN.[/red] Set them in .env file.")
             raise typer.Exit(1)
 
-        asyncio.run(_render(config, view_path, user))
+        asyncio.run(_render(config, view_path, user, output))
 
 
-async def _render(config: SyncConfig, view_path: Path, user: str | None) -> None:
+async def _render(
+    config: SyncConfig, view_path: Path, user: str | None, output: str
+) -> None:
     """Render a dashboard view."""
-    from ha_sync.render import render_view_file
-
     async with HAClient(config.url, config.token) as client:
-        await render_view_file(client, view_path, user)
+        if output == "swiftbar":
+            from ha_sync.swiftbar import render_view_swiftbar
+
+            await render_view_swiftbar(client, view_path, user)
+        else:
+            from ha_sync.render import render_view_file
+
+            await render_view_file(client, view_path, user)
 
 
 @app.command()

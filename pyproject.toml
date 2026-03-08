@@ -74,7 +74,6 @@ select = ["E", "F", "I", "UP", "B", "SIM", "RUF"]
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
-
 [dependency-groups]
 dev = [
     "pyright>=1.1.407",

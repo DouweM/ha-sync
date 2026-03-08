@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any
 
 import logfire
+import yaml
 from rich.console import Console
 
 from ha_sync.client import HAClient
@@ -22,7 +23,14 @@ from ha_sync.models import (
     TodHelper,
     UtilityMeterHelper,
 )
-from ha_sync.utils import dump_yaml, filename_from_name, load_yaml, relative_path
+from ha_sync.utils import (
+    dump_yaml,
+    filename_from_name,
+    git_list_files,
+    git_read_file,
+    load_yaml,
+    relative_path,
+)
 
 from .base import BaseSyncer, DiffItem, SyncResult
 
@@ -316,6 +324,30 @@ class ConfigEntrySyncer(BaseSyncer):
         # Handle collision by appending entry_id suffix
         base = filename.rsplit(".yaml", 1)[0]
         return f"{base}-{entry_id}.yaml"
+
+    def get_base_entities(self) -> dict[str, dict[str, Any]]:
+        """Get config entry helper entities from git HEAD."""
+        if not self._can_read_base():
+            return {}
+
+        result: dict[str, dict[str, Any]] = {}
+        local_path_str = str(self.local_path)
+        files = git_list_files(local_path_str)
+
+        for file_path in files:
+            if not file_path.endswith(".yaml"):
+                continue
+            content = git_read_file(file_path)
+            if not content:
+                continue
+            data = yaml.safe_load(content)
+            if data and isinstance(data, dict):
+                entry_id = data.get("entry_id")
+                if entry_id:
+                    data["_filename"] = Path(file_path).name
+                    result[entry_id] = data
+
+        return result
 
     @logfire.instrument("Pull {self.domain} helpers")
     async def pull(

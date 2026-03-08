@@ -4,6 +4,7 @@ from pathlib import Path
 from typing import Any
 
 import logfire
+import yaml
 from rich.console import Console
 
 from ha_sync.client import HAClient
@@ -11,6 +12,8 @@ from ha_sync.config import SyncConfig
 from ha_sync.models import View
 from ha_sync.utils import (
     dump_yaml,
+    git_list_files,
+    git_read_file,
     load_yaml,
     relative_path,
     slugify,
@@ -138,6 +141,67 @@ class DashboardSyncer(BaseSyncer):
                     view_data = load_yaml(view_file)
                     if view_data:
                         views.append(view_data)
+                config["views"] = views
+
+            result[dir_name] = {
+                "meta": meta,
+                "config": config,
+            }
+
+        return result
+
+    def get_base_entities(self) -> dict[str, dict[str, Any]]:
+        """Get dashboard entities from git HEAD."""
+        if not self._can_read_base():
+            return {}
+
+        result: dict[str, dict[str, Any]] = {}
+        local_path_str = str(self.local_path)
+        files = git_list_files(local_path_str)
+
+        # Group files by dashboard directory
+        dashboard_files: dict[str, list[tuple[str, str]]] = {}
+        for file_path in files:
+            if not file_path.endswith(".yaml"):
+                continue
+            # Extract dir_name from path: dashboards/<dir_name>/<file>.yaml
+            if file_path.startswith(local_path_str):
+                rel = file_path[len(local_path_str) + 1:]
+            else:
+                rel = file_path
+            parts = Path(rel).parts
+            if len(parts) >= 2:
+                dir_name = parts[-2] if len(parts) == 2 else parts[0]
+                filename = parts[-1]
+                content = git_read_file(file_path)
+                if content:
+                    dashboard_files.setdefault(dir_name, []).append((filename, content))
+
+        for dir_name, file_list in dashboard_files.items():
+            meta: dict[str, Any] = {}
+            config: dict[str, Any] = {}
+
+            for filename, content in file_list:
+                data = yaml.safe_load(content)
+                if not data:
+                    continue
+
+                if filename == META_FILE:
+                    meta = data
+                    # Extract config keys
+                    for key in meta.get("_config_keys", []):
+                        if key in meta:
+                            config[key] = meta[key]
+
+            # Build views from non-meta files (if not strategy-based)
+            if "strategy" not in config:
+                views: list[dict[str, Any]] = []
+                for filename, content in sorted(file_list):
+                    if filename == META_FILE:
+                        continue
+                    data = yaml.safe_load(content)
+                    if data:
+                        views.append(data)
                 config["views"] = views
 
             result[dir_name] = {

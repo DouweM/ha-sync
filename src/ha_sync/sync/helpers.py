@@ -4,6 +4,7 @@ from pathlib import Path
 from typing import Any
 
 import logfire
+import yaml
 from rich.console import Console
 
 from ha_sync.client import HAClient
@@ -12,6 +13,8 @@ from ha_sync.models import HELPER_MODELS
 from ha_sync.utils import (
     dump_yaml,
     filename_from_id,
+    git_list_files,
+    git_read_file,
     id_from_filename,
     load_yaml,
     relative_path,
@@ -108,6 +111,36 @@ class HelperSyncer(BaseSyncer):
                         "type": helper_type,
                         **data,
                     }
+
+        return result
+
+    def get_base_entities(self) -> dict[str, dict[str, Any]]:
+        """Get helper entities from git HEAD."""
+        if not self._can_read_base():
+            return {}
+
+        result: dict[str, dict[str, Any]] = {}
+        local_path_str = str(self.local_path)
+        files = git_list_files(local_path_str)
+
+        for file_path in files:
+            if not file_path.endswith(".yaml"):
+                continue
+            content = git_read_file(file_path)
+            if not content:
+                continue
+            data = yaml.safe_load(content)
+            if data and isinstance(data, dict):
+                p = Path(file_path)
+                # Extract helper_type from path: helpers/<type>/<file>.yaml
+                helper_type = p.parent.name
+                if helper_type not in HELPER_TYPES:
+                    continue
+                helper_id = data.get("id", p.stem)
+                result[f"{helper_type}/{helper_id}"] = {
+                    "type": helper_type,
+                    **data,
+                }
 
         return result
 

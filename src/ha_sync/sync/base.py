@@ -6,12 +6,23 @@ from pathlib import Path
 from typing import Any, ClassVar
 
 import logfire
+import yaml
 from rich.console import Console
 
 from ha_sync.client import HAClient
 from ha_sync.config import SyncConfig
 from ha_sync.models import BaseEntityModel
-from ha_sync.utils import dump_yaml, filename_from_id, id_from_filename, load_yaml, relative_path
+from ha_sync.utils import (
+    dump_yaml,
+    filename_from_id,
+    git_has_commits,
+    git_list_files,
+    git_read_file,
+    id_from_filename,
+    is_git_repo,
+    load_yaml,
+    relative_path,
+)
 
 console = Console()
 
@@ -113,6 +124,18 @@ class BaseSyncer(ABC):
         """Get all local entities of this type."""
         ...
 
+    def get_base_entities(self) -> dict[str, dict[str, Any]]:
+        """Get entities from git HEAD (base state for three-way diff).
+
+        Default implementation returns empty dict (no git history).
+        Subclasses with git-aware parsing should override this.
+        """
+        return {}
+
+    def _can_read_base(self) -> bool:
+        """Check if base entities can be read from git."""
+        return is_git_repo() and git_has_commits()
+
 
 class SimpleEntitySyncer(BaseSyncer):
     """Base class for simple entity syncers (single YAML file per entity).
@@ -165,6 +188,29 @@ class SimpleEntitySyncer(BaseSyncer):
             if data and isinstance(data, dict):
                 entity_id = data.get("id", id_from_filename(yaml_file))
                 data["_filename"] = yaml_file.name
+                result[entity_id] = data
+
+        return result
+
+    def get_base_entities(self) -> dict[str, dict[str, Any]]:
+        """Get entities from git HEAD."""
+        if not self._can_read_base():
+            return {}
+
+        result: dict[str, dict[str, Any]] = {}
+        local_path_str = str(self.local_path)
+        files = git_list_files(local_path_str)
+
+        for file_path in files:
+            if not file_path.endswith(".yaml"):
+                continue
+            content = git_read_file(file_path)
+            if not content:
+                continue
+            data = yaml.safe_load(content)
+            if data and isinstance(data, dict):
+                entity_id = data.get("id", id_from_filename(Path(file_path)))
+                data["_filename"] = Path(file_path).name
                 result[entity_id] = data
 
         return result
@@ -779,6 +825,36 @@ class ConfigEntryBasedSyncer(BaseSyncer):
                         "_filename": yaml_file.name,
                         **data,
                     }
+
+        return result
+
+    def get_base_entities(self) -> dict[str, dict[str, Any]]:
+        """Get entities from git HEAD for subtype-based helpers."""
+        if not self._can_read_base():
+            return {}
+
+        result: dict[str, dict[str, Any]] = {}
+        local_path_str = str(self.local_path)
+        files = git_list_files(local_path_str)
+
+        for file_path in files:
+            if not file_path.endswith(".yaml"):
+                continue
+            content = git_read_file(file_path)
+            if not content:
+                continue
+            data = yaml.safe_load(content)
+            if data and isinstance(data, dict):
+                p = Path(file_path)
+                # Extract subtype from path: helpers/template/sensor/file.yaml -> sensor
+                subtype = p.parent.name
+                entry_id = data.get("entry_id")
+                key = f"{subtype}/{entry_id}" if entry_id else f"{subtype}/_new/{p.stem}"
+                result[key] = {
+                    "subtype": subtype,
+                    "_filename": p.name,
+                    **data,
+                }
 
         return result
 

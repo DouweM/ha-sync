@@ -4,6 +4,7 @@ from pathlib import Path
 from typing import Any
 
 import logfire
+import yaml
 from rich.console import Console
 
 from ha_sync.client import HAClient
@@ -12,6 +13,8 @@ from ha_sync.models import Automation
 from ha_sync.utils import (
     dump_yaml,
     filename_from_name,
+    git_list_files,
+    git_read_file,
     load_yaml,
     relative_path,
 )
@@ -62,6 +65,29 @@ class AutomationSyncer(BaseSyncer):
                 if auto_id:
                     # Store filename for later reference
                     data["_filename"] = yaml_file.name
+                    result[auto_id] = data
+
+        return result
+
+    def get_base_entities(self) -> dict[str, dict[str, Any]]:
+        """Get automation entities from git HEAD."""
+        if not self._can_read_base():
+            return {}
+
+        result: dict[str, dict[str, Any]] = {}
+        files = git_list_files(str(self.local_path))
+
+        for file_path in files:
+            if not file_path.endswith(".yaml"):
+                continue
+            content = git_read_file(file_path)
+            if not content:
+                continue
+            data = yaml.safe_load(content)
+            if data and isinstance(data, dict):
+                auto_id = data.get("id")
+                if auto_id:
+                    data["_filename"] = Path(file_path).name
                     result[auto_id] = data
 
         return result
