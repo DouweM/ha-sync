@@ -11,7 +11,7 @@ Key commands (all accept multiple paths, e.g., `automations/ scripts/`):
 - `validate [PATHS...] [-t]`: Validate YAML. Use `-t` to also validate templates against HA.
 - `render <VIEW_PATH> [-u USER]`: Render a dashboard view as CLI text. Use when asked to "show" or "render" a dashboard. If icons are missing or display incorrectly, fix the `ICON_EMOJI` mapping in `src/ha_sync/render.py` first - don't assume the dashboard YAML needs icon specifications.
 
-Don't run `ha-sync` in the current directory, always use a temp dir if you want to test something. NEVER use destructive commands (e.g. `sync`, `push`, `--all`, or `--sync-deletions`) without verification.
+Don't run `ha-sync` in the current directory, always use a temp dir if you want to test something. NEVER use destructive commands (e.g. `push`, `--all`, or `--sync-deletions`) without verification.
 
 Every command is instrumented and traces are sent to [Logfire](https://logfire.pydantic.dev/). The MCP server can help you see what happened in each run, including HTTP requests and responses.
 

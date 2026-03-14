@@ -7,7 +7,7 @@ Manage your dashboards, automations, scripts, scenes, and helpers as code. Pull 
 ## Features
 
 - **Bidirectional sync**: Pull from Home Assistant, push local changes back, or use `sync` for smart merging
-- **Git-aware**: Auto-stashes local changes before pull, restores after - safe to run anytime
+- **Git-aware three-way diff**: Uses git HEAD as base to detect local vs remote changes separately — safe to run with a dirty working tree
 - **Diff view**: See exactly what changed between local and remote before syncing
 - **Validation**: Check YAML syntax and Jinja2 templates before pushing
 - **Multiple entity types**: Dashboards, automations, scripts, scenes, and all helper types
@@ -100,14 +100,16 @@ ha-sync sync automations/ scripts/
 ```
 
 The sync command:
-- Shows remote and local changes before doing anything
-- In git repos, stashes local changes, pulls, then restores
-- Detects merge conflicts and stops for manual resolution
-- Only asks for confirmation when pushing local changes
+- Uses three-way diff (base from git HEAD, local from disk, remote from HA)
+- Shows remote changes, local changes, and conflicts before doing anything
+- Pulls remote-only changes, pushes local-only changes
+- Detects conflicts when the same entity changed on both sides
+- Supports `--theirs` / `--ours` flags for conflict resolution
+- Safe to run with a dirty working tree (no stashing)
 
 ### pull
 
-Pull entities from Home Assistant to local YAML files.
+Pull entities from Home Assistant to local YAML files. In a git repo, uses three-way diff to only write remote-changed files — local-only changes are left untouched.
 
 ```bash
 ha-sync pull                      # Pull all
@@ -136,7 +138,7 @@ Always shows a preview and asks for confirmation.
 
 ### diff
 
-Show differences between local and remote.
+Show differences between local and remote. In a git repo, shows three sections: local changes, remote changes, and conflicts.
 
 ```bash
 ha-sync diff                      # Diff all
@@ -250,9 +252,9 @@ ha-sync works great with git. A typical workflow:
 git checkout main
 git pull
 
-# Get latest from Home Assistant
-ha-sync pull
-git add -A && git commit -m "Pull from HA"
+# Sync with Home Assistant (pulls remote changes, pushes local changes)
+ha-sync sync
+git add -A && git commit -m "Sync with HA"
 
 # Make your changes...
 
@@ -272,7 +274,7 @@ The `sync` command handles the common case where you've made changes both locall
 ha-sync sync
 ```
 
-This pulls remote changes first, then pushes your local changes. If the same file was modified in both places, git's stash mechanism will detect the conflict.
+This uses three-way diff to detect what changed locally vs remotely since the last commit. Remote-only changes are pulled, local-only changes are pushed, and conflicts are shown for resolution.
 
 ## Development
 
