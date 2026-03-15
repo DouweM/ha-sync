@@ -1,8 +1,14 @@
 """Render a Home Assistant dashboard view as SwiftBar menu bar output."""
 
+from __future__ import annotations
+
 from collections.abc import Generator
 from contextlib import contextmanager
-from typing import Any, ClassVar
+from pathlib import Path
+from typing import TYPE_CHECKING, Any, ClassVar
+
+if TYPE_CHECKING:
+    from ha_sync.client import HAClient
 
 from ha_sync.render_models import (
     RenderedAutoEntities,
@@ -561,7 +567,7 @@ class SwiftBarViewRenderer:
 
 
 async def render_view_swiftbar(
-    client: "HAClient", view_path: "Path", user: str | None = None  # noqa: F821
+    client: HAClient, view_path: Path, user: str | None = None
 ) -> None:
     """Render a dashboard view file as SwiftBar output."""
     from ha_sync.render import ViewResolver

@@ -16,7 +16,13 @@ from rich.text import Text
 
 from ha_sync.client import HAClient
 from ha_sync.render_models import (
+    AutoEntitiesCardConfig,
+    CachedEntityState,
+    CardConfig,
+    EntityBadgeConfig,
     FormattedState,
+    HeadingCardConfig,
+    LogbookCardConfig,
     RenderedAutoEntities,
     RenderedBadge,
     RenderedEntityBadge,
@@ -31,7 +37,20 @@ from ha_sync.render_models import (
     RenderedTile,
     RenderedView,
     RenderedWeather,
+    SectionConfig,
     SemanticColor,
+    TemplateBadgeConfig,
+    TileCardConfig,
+    ViewConfig,
+    VisibilityCondition,
+    VisibilityConditionAnd,
+    VisibilityConditionNot,
+    VisibilityConditionNumericState,
+    VisibilityConditionOr,
+    VisibilityConditionScreen,
+    VisibilityConditionState,
+    VisibilityConditionUser,
+    WeatherCardConfig,
     format_state,
 )
 
@@ -52,7 +71,7 @@ class ViewResolver:
 
     def __init__(self, client: HAClient) -> None:
         self.client = client
-        self.state_cache: dict[str, dict[str, Any]] = {}
+        self.state_cache: dict[str, CachedEntityState] = {}
         self.user_ids: dict[str, str] = {}
         self.current_user: str | None = None
         self.label_cache: dict[str, set[str]] = {}
@@ -123,13 +142,13 @@ class ViewResolver:
                         unit = parts[3].strip() if len(parts) > 3 else ""
                         icon = parts[4].strip() if len(parts) > 4 else ""
                         device_class = parts[5].strip() if len(parts) > 5 else ""
-                        self.state_cache[entity_id] = {
-                            "state": state,
-                            "name": name,
-                            "unit": unit,
-                            "icon": icon,
-                            "device_class": device_class,
-                        }
+                        self.state_cache[entity_id] = CachedEntityState(
+                            state=state,
+                            name=name,
+                            unit=unit,
+                            icon=icon,
+                            device_class=device_class,
+                        )
             except Exception as e:
                 console.print(
                     f"[dim]Warning: Failed to fetch states for batch: {type(e).__name__}: {e}[/dim]"
@@ -137,7 +156,7 @@ class ViewResolver:
 
         # Fill in missing icons from entity registry (platform-provided icons)
         missing_icon_entities = [
-            eid for eid, cached in self.state_cache.items() if not cached.get("icon")
+            eid for eid, cached in self.state_cache.items() if not cached.icon
         ]
         if missing_icon_entities:
             await self._fetch_registry_icons(missing_icon_entities)
@@ -152,29 +171,29 @@ class ViewResolver:
                 if entry:
                     icon = entry.get("icon") or entry.get("original_icon") or ""
                     if icon and entity_id in self.state_cache:
-                        self.state_cache[entity_id]["icon"] = icon
+                        self.state_cache[entity_id].icon = icon
         except Exception:
             pass  # Registry not available, fall back to domain/device_class
 
     def get_state(self, entity_id: str) -> str:
         """Get current state of an entity from cache."""
         if entity_id in self.state_cache:
-            return self.state_cache[entity_id].get("state", "unknown")
+            return self.state_cache[entity_id].state
         return "unknown"
 
     def get_attribute(self, entity_id: str, attribute: str) -> Any:
         """Get an attribute of an entity from cache."""
         if entity_id in self.state_cache:
             if attribute == "friendly_name":
-                return self.state_cache[entity_id].get("name")
+                return self.state_cache[entity_id].name
             elif attribute == "unit_of_measurement":
-                return self.state_cache[entity_id].get("unit")
+                return self.state_cache[entity_id].unit
         return None
 
     def get_display_name(self, entity_id: str) -> str:
         """Get friendly_name from HA, or clean up entity_id as fallback."""
         if entity_id in self.state_cache:
-            name = self.state_cache[entity_id].get("name")
+            name = self.state_cache[entity_id].name
             if name:
                 return name
         return entity_id.split(".")[-1].replace("_", " ").title()
@@ -192,63 +211,54 @@ class ViewResolver:
         except Exception:
             return "[error]"
 
-    def check_visibility(self, conditions: list[dict[str, Any]]) -> bool:
+    def check_visibility(self, conditions: list[VisibilityCondition]) -> bool:
         """Check if visibility conditions are met. Returns True if visible."""
         if not conditions:
             return True
 
         for condition in conditions:
-            cond_type = condition.get("condition")
-
-            if cond_type == "state":
-                entity = condition.get("entity")
-                if not entity:
+            if isinstance(condition, VisibilityConditionState):
+                if not condition.entity:
                     return False
-                state = self.get_state(entity)
-                if "state" in condition and state != str(condition["state"]):
+                state = self.get_state(condition.entity)
+                if condition.state is not None and state != str(condition.state):
                     return False
-                if "state_not" in condition and state == str(condition["state_not"]):
+                if condition.state_not is not None and state == str(condition.state_not):
                     return False
 
-            elif cond_type == "numeric_state":
-                entity = condition.get("entity")
-                if not entity:
+            elif isinstance(condition, VisibilityConditionNumericState):
+                if not condition.entity:
                     return False
-                state = self.get_state(entity)
+                state = self.get_state(condition.entity)
                 try:
                     value = float(state)
-                    if "above" in condition and value <= float(condition["above"]):
+                    if condition.above is not None and value <= condition.above:
                         return False
-                    if "below" in condition and value >= float(condition["below"]):
+                    if condition.below is not None and value >= condition.below:
                         return False
                 except (ValueError, TypeError):
                     return False
 
-            elif cond_type == "screen":
-                media_query = condition.get("media_query", "")
-                if "max-width: 767px" in media_query:
+            elif isinstance(condition, VisibilityConditionScreen):
+                if "max-width: 767px" in condition.media_query:
                     return False  # Mobile-only
 
-            elif cond_type == "user":
+            elif isinstance(condition, VisibilityConditionUser):
                 if self.current_user is None:
                     return False
-                users = condition.get("users", [])
-                if self.current_user not in users:
+                if self.current_user not in condition.users:
                     return False
 
-            elif cond_type == "or":
-                sub_conditions = condition.get("conditions", [])
-                if not any(self.check_visibility([c]) for c in sub_conditions):
+            elif isinstance(condition, VisibilityConditionOr):
+                if not any(self.check_visibility([c]) for c in condition.conditions):
                     return False
 
-            elif cond_type == "and":
-                sub_conditions = condition.get("conditions", [])
-                if not all(self.check_visibility([c]) for c in sub_conditions):
+            elif isinstance(condition, VisibilityConditionAnd):
+                if not all(self.check_visibility([c]) for c in condition.conditions):
                     return False
 
-            elif cond_type == "not":
-                sub_conditions = condition.get("conditions", [])
-                if self.check_visibility(sub_conditions):
+            elif isinstance(condition, VisibilityConditionNot):
+                if self.check_visibility(condition.conditions):
                     return False
 
         return True
@@ -310,7 +320,8 @@ class ViewResolver:
 
         device_class: str | None = None
         if entity_id:
-            device_class = self.state_cache.get(entity_id, {}).get("device_class", "") or None
+            cached = self.state_cache.get(entity_id)
+            device_class = (cached.device_class if cached else "") or None
 
         # Weather entities: use condition as icon for condition-based SF Symbol lookup
         if (
@@ -332,317 +343,41 @@ class ViewResolver:
 
     def _format_state(self, entity_id: str, state: str) -> FormattedState:
         """Format entity state using the shared format_state function."""
-        device_class = self.state_cache.get(entity_id, {}).get("device_class", "")
-        unit = self.state_cache.get(entity_id, {}).get("unit", "")
+        cached = self.state_cache.get(entity_id)
+        device_class = cached.device_class if cached else ""
+        unit = cached.unit if cached else ""
         return format_state(entity_id, state, device_class=device_class, unit=unit)
-
-    # -- Legacy API (used by SwiftBarRenderer) --
-
-    def format_state(self, entity_id: str, state: str) -> tuple[str, str | None]:
-        """Format entity state for display. Returns (text, style).
-
-        Legacy method preserved for SwiftBarRenderer compatibility.
-        """
-        fs = self._format_state(entity_id, state)
-        style: str | None = None
-        if fs.color is not None:
-            style = RichViewRenderer.SEMANTIC_COLOR_MAP.get(fs.color)
-        return fs.text, style
-
-    async def resolve_auto_entities(
-        self, card: dict[str, Any]
-    ) -> list[tuple[str, str, str, dict[str, Any]]]:
-        """Resolve auto-entities filter rules to matched entities.
-
-        Legacy method preserved for SwiftBarRenderer compatibility.
-        Returns list of (entity_id, name, icon, options) tuples.
-        """
-        card_config = card.get("card", {})
-        if card_config.get("type") in ("custom:map-card", "logbook"):
-            return []
-
-        filters = card.get("filter", {})
-        include_rules = filters.get("include", [])
-
-        matched_entities: list[tuple[str, dict[str, Any]]] = []
-
-        for rule in include_rules:
-            if "entity_id" in rule and not rule.get("domain"):
-                entity_id = rule["entity_id"]
-                options = rule.get("options", {})
-                if entity_id not in self.state_cache:
-                    await self.fetch_all_states({entity_id})
-                if entity_id in self.state_cache:
-                    matched_entities.append((entity_id, options))
-                continue
-
-            domain = rule.get("domain")
-            if not domain:
-                continue
-
-            if rule.get("integration"):
-                continue
-
-            include_label = rule.get("label")
-            attrs = rule.get("attributes", {})
-            domain_entities = await self.search_entities(domain=domain)
-            include_label_entities = (
-                await self.get_entities_with_label(include_label)
-                if include_label
-                else None
-            )
-
-            for ent in domain_entities:
-                entity_id = ent["entity_id"]
-                state = ent["state"]
-
-                if entity_id in [m[0] for m in matched_entities]:
-                    continue
-
-                if (
-                    include_label_entities is not None
-                    and entity_id not in include_label_entities
-                ):
-                    continue
-
-                not_filter = rule.get("not", {})
-                skip = False
-
-                if not_filter:
-                    or_conditions = not_filter.get("or", [])
-                    for cond in or_conditions:
-                        if "state" in cond and state == cond["state"]:
-                            skip = True
-                            break
-                        if "label" in cond:
-                            label_entities = (
-                                await self.get_entities_with_label(cond["label"])
-                            )
-                            if entity_id in label_entities:
-                                skip = True
-                                break
-
-                if skip:
-                    continue
-
-                attr_match = True
-                ent_attrs = ent.get("attributes", {})
-                for attr_name, attr_val in attrs.items():
-                    ent_attr = str(ent_attrs.get(attr_name, "")).lower()
-                    expected = str(attr_val).lower()
-                    if ent_attr != expected:
-                        attr_match = False
-                        break
-                if not attr_match:
-                    continue
-
-                options = rule.get("options", {})
-                matched_entities.append((entity_id, options))
-                self.state_cache[entity_id] = {
-                    "state": ent["state"],
-                    "name": ent["name"],
-                    "icon": ent.get("icon", ""),
-                    "unit": "",
-                }
-
-        seen: set[str] = set()
-        unique_entities: list[tuple[str, dict[str, Any]]] = []
-        for entity_id, options in matched_entities:
-            if entity_id not in seen:
-                seen.add(entity_id)
-                unique_entities.append((entity_id, options))
-
-        result: list[tuple[str, str, str, dict[str, Any]]] = []
-        for entity_id, options in unique_entities:
-            cached = self.state_cache.get(entity_id, {})
-            state = cached.get("state", "")
-            if state in ("unavailable", "unknown", ""):
-                continue
-
-            opt_name = options.get("name", "").strip()
-            name = (
-                opt_name
-                if opt_name
-                else cached.get("name", "")
-                or entity_id.split(".")[-1].replace("_", " ").title()
-            )
-            icon = options.get("icon", "") or cached.get("icon", "")
-            result.append((entity_id, name, icon, options))
-
-        return result
-
-    async def fetch_logbook_entries(
-        self, card: dict[str, Any], max_entries: int = 5
-    ) -> list[tuple[str, str, str, str, str]]:
-        """Fetch logbook entries for a card.
-
-        Legacy method preserved for SwiftBarRenderer compatibility.
-        Returns list of (entity_id, name, state, formatted_state, time_str).
-        """
-        from datetime import UTC, datetime
-
-        target = card.get("target", {})
-        entity_ids = target.get("entity_id", [])
-        if not entity_ids:
-            entity_ids = card.get("entities", [])
-        if isinstance(entity_ids, str):
-            entity_ids = [entity_ids]
-
-        if not entity_ids:
-            return []
-
-        template_lines = []
-        for eid in entity_ids:
-            template_lines.append(
-                f'{eid}|||{{{{ states("{eid}") }}}}|||'
-                f'{{{{ state_attr("{eid}", "friendly_name") '
-                f'| default("", true) | replace("\\n", " ") }}}}|||'
-                f"{{{{ as_timestamp(states.{eid}.last_changed)"
-                f" | default(0) }}}}"
-            )
-
-        template = "\n".join(template_lines)
-
-        try:
-            output = await self.client.render_template(template)
-        except Exception:
-            return []
-
-        entries: list[tuple[Any, str, str, str]] = []
-        for line in output.strip().split("\n"):
-            parts = line.split("|||")
-            if len(parts) >= 4:
-                entity_id = parts[0].strip()
-                state = parts[1].strip()
-                name = (
-                    parts[2].strip()
-                    or entity_id.split(".")[-1].replace("_", " ").title()
-                )
-                last_changed_str = parts[3].strip()
-
-                if last_changed_str and state not in (
-                    "unavailable",
-                    "unknown",
-                ):
-                    try:
-                        timestamp = float(last_changed_str)
-                        if timestamp > 0:
-                            last_changed = datetime.fromtimestamp(
-                                timestamp, tz=UTC
-                            )
-                            entries.append(
-                                (last_changed, name, state, entity_id)
-                            )
-                    except ValueError:
-                        pass
-
-        entries.sort(reverse=True, key=lambda x: x[0])
-        now = datetime.now(UTC)
-
-        result: list[tuple[str, str, str, str, str]] = []
-        for last_changed, name, state, entity_id in entries[:max_entries]:
-            formatted, _ = self.format_state(entity_id, state)
-            if not formatted:
-                continue
-
-            delta = now - last_changed
-            if delta.days > 0:
-                time_str = f"{delta.days}d ago"
-            elif delta.seconds >= 3600:
-                time_str = f"{delta.seconds // 3600}h ago"
-            elif delta.seconds >= 60:
-                time_str = f"{delta.seconds // 60}m ago"
-            else:
-                time_str = "just now"
-
-            result.append(
-                (entity_id, name, state, formatted, time_str)
-            )
-
-        return result
-
-    async def fetch_weather(
-        self, card: dict[str, Any]
-    ) -> tuple[str, str, str] | None:
-        """Fetch weather data for a weather-forecast card.
-
-        Legacy method preserved for SwiftBarRenderer compatibility.
-        Returns (condition, temperature_str, entity_id) or None.
-        """
-        entity_id = card.get("entity")
-        if not entity_id:
-            return None
-
-        state = self.get_state(entity_id)
-        if state in ("unavailable", "unknown"):
-            return None
-
-        template = (
-            f'{{{{ state_attr("{entity_id}", "temperature")'
-            f' | default("", true) }}}}|||'
-            f'{{{{ state_attr("{entity_id}", "temperature_unit")'
-            f' | default("", true) }}}}'
-        )
-        try:
-            output = await self.eval_template(template)
-            parts = output.split("|||")
-            temp = parts[0].strip() if parts else ""
-            unit = parts[1].strip() if len(parts) > 1 else ""
-            try:
-                val = float(temp)
-                temp = (
-                    str(int(val)) if val == int(val) else f"{val:.1f}"
-                )
-            except (ValueError, TypeError):
-                pass
-            temp_str = f"{temp}{unit}" if temp else ""
-        except Exception:
-            temp_str = ""
-
-        condition = (
-            state.replace("_", " ")
-            .replace("partlycloudy", "Partly Cloudy")
-            .title()
-        )
-        return condition, temp_str, entity_id
 
     # -- Resolve methods --
 
-    async def _resolve_badge(self, badge: dict[str, Any]) -> RenderedBadge | None:
+    async def _resolve_badge(
+        self, badge: EntityBadgeConfig | TemplateBadgeConfig
+    ) -> RenderedBadge | None:
         """Resolve a single badge into a RenderedBadge model."""
-        if not self.check_visibility(badge.get("visibility", [])):
+        if not self.check_visibility(badge.visibility):
             return None
 
-        badge_type = badge.get("type", "entity")
-
-        if badge_type == "entity":
-            entity_id = badge.get("entity")
+        if isinstance(badge, EntityBadgeConfig):
+            entity_id = badge.entity
             if not entity_id:
                 return None
 
             state = self.get_state(entity_id)
-            name = badge.get("name")
-            icon_str = badge.get("icon") or self.state_cache.get(entity_id, {}).get("icon", "")
-            state_content = badge.get("state_content")
-            show_icon = badge.get("show_icon", True)
+            cached = self.state_cache.get(entity_id)
+            icon_str = badge.icon or (cached.icon if cached else "")
 
-            display_name = name or self.get_display_name(entity_id)
+            display_name = badge.name or self.get_display_name(entity_id)
 
             formatted = self._format_state(entity_id, state)
 
-            # Match the old logic: if state_content == "name", don't show state
-            if state_content == "name":
+            if badge.state_content == "name":
                 formatted = FormattedState(text="")
 
-            # Check if badge would be empty (same logic as old code)
             icon = self._make_icon(
-                icon_str if show_icon else None,
-                entity_id if show_icon else None,
+                icon_str if badge.show_icon else None,
+                entity_id if badge.show_icon else None,
             )
 
-            # The old code checked: if text.plain.strip() in ("", emoji.strip()): return None
-            # This means: if after building the text, only whitespace or only the emoji remains,
-            # skip it. We approximate: if name is empty and formatted text is empty, skip.
             if not display_name and not formatted.text:
                 return None
 
@@ -653,11 +388,9 @@ class ViewResolver:
                 icon=icon,
             )
 
-        elif badge_type == "custom:mushroom-template-badge":
-            entity_id = badge.get("entity")
-            content_template = badge.get("content")
-            label_template = badge.get("label")
-            icon_str = badge.get("icon", "")
+        elif isinstance(badge, TemplateBadgeConfig):
+            entity_id = badge.entity
+            icon_str = badge.icon or ""
             # Icon can be a template (e.g. conditional mdi:controller vs mdi:television)
             if icon_str and "{" in icon_str:
                 icon_str = (await self.eval_template(icon_str, entity_id)).strip()
@@ -666,11 +399,10 @@ class ViewResolver:
 
             content: str | None = None
             content_color: SemanticColor | None = None
-            if content_template:
-                rendered = await self.eval_template(content_template, entity_id)
+            if badge.content:
+                rendered = await self.eval_template(badge.content, entity_id)
                 if rendered and rendered != "[error]":
                     content = rendered
-                    # Color logic: home/oasis -> POSITIVE, away/not_home -> INACTIVE, else -> INFO
                     if rendered.lower() in ("home", "oasis"):
                         content_color = SemanticColor.POSITIVE
                     elif rendered in ("Away", "not_home"):
@@ -679,13 +411,11 @@ class ViewResolver:
                         content_color = SemanticColor.INFO
 
             label: str | None = None
-            if label_template:
-                rendered = await self.eval_template(label_template, entity_id)
+            if badge.label:
+                rendered = await self.eval_template(badge.label, entity_id)
                 if rendered and rendered != "[error]":
                     label = rendered
 
-            # Old code returned None if text was empty or only the emoji icon.
-            # This means: must have content or label beyond just the icon
             if not content and not label:
                 return None
 
@@ -699,18 +429,19 @@ class ViewResolver:
 
         return None
 
-    def _resolve_tile(self, card: dict[str, Any]) -> RenderedTile | None:
+    def _resolve_tile(self, card: TileCardConfig) -> RenderedTile | None:
         """Resolve a tile card into a RenderedTile model."""
-        if not self.check_visibility(card.get("visibility", [])):
+        if not self.check_visibility(card.visibility):
             return None
 
-        entity_id = card.get("entity")
+        entity_id = card.entity
         if not entity_id:
             return None
 
         state = self.get_state(entity_id)
-        name = card.get("name") or self.get_display_name(entity_id)
-        icon_str = card.get("icon") or self.state_cache.get(entity_id, {}).get("icon", "")
+        name = card.name or self.get_display_name(entity_id)
+        cached = self.state_cache.get(entity_id)
+        icon_str = card.icon or (cached.icon if cached else "")
 
         icon = self._make_icon(icon_str, entity_id)
         formatted = self._format_state(entity_id, state)
@@ -722,66 +453,55 @@ class ViewResolver:
             icon=icon,
         )
 
-    async def _resolve_heading(self, card: dict[str, Any]) -> RenderedHeading | None:
+    async def _resolve_heading(self, card: HeadingCardConfig) -> RenderedHeading | None:
         """Resolve a heading card into a RenderedHeading model."""
-        if not self.check_visibility(card.get("visibility", [])):
+        if not self.check_visibility(card.visibility):
             return None
 
-        heading = card.get("heading", "")
-        icon_str = card.get("icon", "")
-
-        if not heading and not icon_str:
+        if not card.heading and not card.icon:
             return None
 
-        icon = self._make_icon(icon_str) if icon_str else RenderedIcon()
+        icon = self._make_icon(card.icon) if card.icon else RenderedIcon()
 
         badges: list[RenderedBadge] = []
-        for badge in card.get("badges", []):
+        for badge in card.badges:
             rendered = await self._resolve_badge(badge)
             if rendered:
                 badges.append(rendered)
 
         return RenderedHeading(
-            heading=heading,
+            heading=card.heading,
             icon=icon,
             badges=badges,
         )
 
-    async def _resolve_auto_entities(self, card: dict[str, Any]) -> RenderedAutoEntities:
+    async def _resolve_auto_entities(self, card: AutoEntitiesCardConfig) -> RenderedAutoEntities:
         """Resolve auto-entities card by evaluating filter rules."""
         tiles: list[RenderedTile] = []
 
-        card_config = card.get("card", {})
-        if card_config.get("type") in ("custom:map-card", "logbook"):
+        if card.card.type in ("custom:map-card", "logbook"):
             return RenderedAutoEntities(tiles=tiles)
-
-        filters = card.get("filter", {})
-        include_rules = filters.get("include", [])
 
         matched_entities: list[tuple[str, dict[str, Any]]] = []
 
-        for rule in include_rules:
-            if "entity_id" in rule and not rule.get("domain"):
-                entity_id = rule["entity_id"]
-                options = rule.get("options", {})
+        for rule in card.filter.include:
+            if rule.entity_id and not rule.domain:
+                entity_id = rule.entity_id
                 if entity_id not in self.state_cache:
                     await self.fetch_all_states({entity_id})
                 if entity_id in self.state_cache:
-                    matched_entities.append((entity_id, options))
+                    matched_entities.append((entity_id, rule.options))
                 continue
 
-            domain = rule.get("domain")
-            if not domain:
+            if not rule.domain:
                 continue
 
-            if rule.get("integration"):
+            if rule.integration:
                 continue
 
-            include_label = rule.get("label")
-            attrs = rule.get("attributes", {})
-            domain_entities = await self.search_entities(domain=domain)
+            domain_entities = await self.search_entities(domain=rule.domain)
             include_label_entities = (
-                await self.get_entities_with_label(include_label) if include_label else None
+                await self.get_entities_with_label(rule.label) if rule.label else None
             )
 
             for ent in domain_entities:
@@ -794,17 +514,14 @@ class ViewResolver:
                 if include_label_entities is not None and entity_id not in include_label_entities:
                     continue
 
-                not_filter = rule.get("not", {})
                 skip = False
-
-                if not_filter:
-                    or_conditions = not_filter.get("or", [])
-                    for cond in or_conditions:
-                        if "state" in cond and state == cond["state"]:
+                if rule.not_:
+                    for cond in rule.not_.or_:
+                        if cond.state is not None and state == cond.state:
                             skip = True
                             break
-                        if "label" in cond:
-                            label_entities = await self.get_entities_with_label(cond["label"])
+                        if cond.label is not None:
+                            label_entities = await self.get_entities_with_label(cond.label)
                             if entity_id in label_entities:
                                 skip = True
                                 break
@@ -814,7 +531,7 @@ class ViewResolver:
 
                 attr_match = True
                 ent_attrs = ent.get("attributes", {})
-                for attr_name, attr_val in attrs.items():
+                for attr_name, attr_val in rule.attributes.items():
                     ent_attr = str(ent_attrs.get(attr_name, "")).lower()
                     expected = str(attr_val).lower()
                     if ent_attr != expected:
@@ -823,14 +540,12 @@ class ViewResolver:
                 if not attr_match:
                     continue
 
-                options = rule.get("options", {})
-                matched_entities.append((entity_id, options))
-                self.state_cache[entity_id] = {
-                    "state": ent["state"],
-                    "name": ent["name"],
-                    "icon": ent.get("icon", ""),
-                    "unit": "",
-                }
+                matched_entities.append((entity_id, rule.options))
+                self.state_cache[entity_id] = CachedEntityState(
+                    state=ent["state"],
+                    name=ent["name"],
+                    icon=ent.get("icon", ""),
+                )
 
         seen: set[str] = set()
         unique_entities: list[tuple[str, dict[str, Any]]] = []
@@ -840,18 +555,16 @@ class ViewResolver:
                 unique_entities.append((entity_id, options))
 
         for entity_id, options in unique_entities:
-            cached = self.state_cache.get(entity_id, {})
-            state = cached.get("state", "")
+            cached = self.state_cache.get(entity_id)
+            state = cached.state if cached else ""
             if state in ("unavailable", "unknown", ""):
                 continue
 
             opt_name = options.get("name", "").strip()
-            name = (
-                opt_name
-                if opt_name
-                else cached.get("name", "") or entity_id.split(".")[-1].replace("_", " ").title()
-            )
-            icon_str = options.get("icon", "") or cached.get("icon", "")
+            cached_name = cached.name if cached else ""
+            fallback_name = entity_id.split(".")[-1].replace("_", " ").title()
+            name = opt_name if opt_name else cached_name or fallback_name
+            icon_str = options.get("icon", "") or (cached.icon if cached else "")
             icon = self._make_icon(icon_str, entity_id)
             formatted = self._format_state(entity_id, state)
 
@@ -865,19 +578,17 @@ class ViewResolver:
         return RenderedAutoEntities(tiles=tiles)
 
     async def _resolve_logbook(
-        self, card: dict[str, Any], max_entries: int = 5
+        self, card: LogbookCardConfig, max_entries: int = 5
     ) -> RenderedLogbook:
         """Resolve a logbook card into a RenderedLogbook model."""
         from datetime import UTC, datetime
 
         entries: list[RenderedLogbookEntry] = []
 
-        target = card.get("target", {})
-        entity_ids = target.get("entity_id", [])
+        target_ids = card.target.entity_id
+        entity_ids: list[str] = [target_ids] if isinstance(target_ids, str) else list(target_ids)
         if not entity_ids:
-            entity_ids = card.get("entities", [])
-        if isinstance(entity_ids, str):
-            entity_ids = [entity_ids]
+            entity_ids = [card.entities] if isinstance(card.entities, str) else list(card.entities)
 
         if not entity_ids:
             return RenderedLogbook(entries=entries)
@@ -934,7 +645,8 @@ class ViewResolver:
             else:
                 time_str = "just now"
 
-            icon_str = self.state_cache.get(entity_id, {}).get("icon", "")
+            cached = self.state_cache.get(entity_id)
+            icon_str = cached.icon if cached else ""
             icon = self._make_icon(icon_str, entity_id)
 
             entries.append(RenderedLogbookEntry(
@@ -947,9 +659,9 @@ class ViewResolver:
 
         return RenderedLogbook(entries=entries)
 
-    async def _resolve_weather(self, card: dict[str, Any]) -> RenderedWeather | None:
+    async def _resolve_weather(self, card: WeatherCardConfig) -> RenderedWeather | None:
         """Resolve a weather-forecast card into a RenderedWeather model."""
-        entity_id = card.get("entity")
+        entity_id = card.entity
         if not entity_id:
             return None
 
@@ -978,7 +690,8 @@ class ViewResolver:
 
         condition = state.replace("_", " ").replace("partlycloudy", "Partly Cloudy").title()
 
-        icon_str = self.state_cache.get(entity_id, {}).get("icon", "")
+        cached = self.state_cache.get(entity_id)
+        icon_str = cached.icon if cached else ""
         icon = self._make_icon(icon_str, entity_id)
 
         return RenderedWeather(
@@ -989,61 +702,50 @@ class ViewResolver:
             icon=icon,
         )
 
-    async def _resolve_card(self, card: dict[str, Any]) -> list[RenderedSectionItem]:
+    async def _resolve_card(self, card: CardConfig) -> list[RenderedSectionItem]:
         """Resolve a single card into RenderedSectionItem(s)."""
-        if not self.check_visibility(card.get("visibility", [])):
+        if not self.check_visibility(card.visibility):
             return []
 
-        card_type = card.get("type", "")
-
-        if card_type == "tile":
+        if isinstance(card, TileCardConfig):
             tile = self._resolve_tile(card)
             return [tile] if tile else []
-        elif card_type == "heading":
+        elif isinstance(card, HeadingCardConfig):
             heading = await self._resolve_heading(card)
             return [heading] if heading else []
-        elif card_type == "picture-entity":
-            return []  # Skip cameras
-        elif card_type == "custom:auto-entities":
+        elif isinstance(card, AutoEntitiesCardConfig):
             auto = await self._resolve_auto_entities(card)
             return [auto] if auto.tiles else []
-        elif card_type == "logbook":
+        elif isinstance(card, LogbookCardConfig):
             logbook = await self._resolve_logbook(card)
             return [logbook] if logbook.entries else []
-        elif card_type == "weather-forecast":
+        elif isinstance(card, WeatherCardConfig):
             weather = await self._resolve_weather(card)
             return [weather] if weather else []
-        elif card_type in ("custom:map-card", "history-graph", "custom:navbar-card"):
-            return []
 
         return []
 
-    async def _resolve_section(self, section: dict[str, Any]) -> RenderedSection:
+    async def _resolve_section(self, section: SectionConfig) -> RenderedSection:
         """Resolve a section into a RenderedSection model.
 
         Implements the pending heading pattern: headings with only text (no badges)
         are deferred until non-heading content follows. A blank line (RenderedSpacing)
         is inserted before headings that have subsequent content.
         """
-        if not self.check_visibility(section.get("visibility", [])):
+        if not self.check_visibility(section.visibility):
             return RenderedSection()
 
-        cards = section.get("cards", [])
         items: list[RenderedSectionItem] = []
-        pending_heading: dict[str, Any] | None = None
+        pending_heading: RenderedHeading | None = None
 
-        for card in cards:
-            card_type = card.get("type", "")
-
-            if card_type == "heading" and card.get("heading"):
+        for card in section.cards:
+            if isinstance(card, HeadingCardConfig) and card.heading:
                 resolved_heading = await self._resolve_heading(card)
                 if resolved_heading:
                     if pending_heading:
                         # Previous heading had no content — emit it now
                         items.append(RenderedSpacing())
-                        prev_heading = await self._resolve_heading(pending_heading)
-                        if prev_heading:
-                            items.append(prev_heading)
+                        items.append(pending_heading)
                         pending_heading = None
                     if resolved_heading.badges:
                         # Heading with badges — emit immediately
@@ -1051,16 +753,14 @@ class ViewResolver:
                         items.append(resolved_heading)
                     else:
                         # Heading without badges — defer
-                        pending_heading = card
+                        pending_heading = resolved_heading
                 continue
 
             card_items = await self._resolve_card(card)
 
             if card_items and pending_heading:
                 items.append(RenderedSpacing())
-                heading = await self._resolve_heading(pending_heading)
-                if heading:
-                    items.append(heading)
+                items.append(pending_heading)
                 pending_heading = None
 
             items.extend(card_items)
@@ -1085,10 +785,12 @@ class ViewResolver:
             raise FileNotFoundError(f"View file not found: {view_path}")
 
         with open(view_path) as f:
-            view = yaml.safe_load(f)
+            raw = yaml.safe_load(f)
 
-        if not view:
+        if not raw:
             raise ValueError(f"Could not parse view file: {view_path}")
+
+        view_config = ViewConfig.model_validate(raw)
 
         # Set up user if specified
         if user:
@@ -1102,30 +804,28 @@ class ViewResolver:
 
         # Extract all entities and fetch states in one call
         entities: set[str] = set()
-        self.extract_entities(view, entities)
+        self.extract_entities(raw, entities)
         await self.fetch_all_states(entities)
 
         # Resolve header
-        title = view.get("title", "View")
-        icon_str = view.get("icon", "")
-        icon = self._make_icon(icon_str)
+        icon = self._make_icon(view_config.icon)
 
         # Resolve badges
         badges: list[RenderedBadge] = []
-        for badge in view.get("badges", []):
-            rendered = await self._resolve_badge(badge)
+        for badge_config in view_config.badges:
+            rendered = await self._resolve_badge(badge_config)
             if rendered:
                 badges.append(rendered)
 
         # Resolve sections
         sections: list[RenderedSection] = []
-        for section in view.get("sections", []):
-            resolved = await self._resolve_section(section)
+        for section_config in view_config.sections:
+            resolved = await self._resolve_section(section_config)
             if resolved.items:
                 sections.append(resolved)
 
         return RenderedView(
-            title=title,
+            title=view_config.title,
             path=str(view_path),
             icon=icon,
             badges=badges,

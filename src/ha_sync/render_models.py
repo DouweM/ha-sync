@@ -40,6 +40,21 @@ class SemanticColor(StrEnum):
 
 
 # =============================================================================
+# Cached entity state (internal — used by ViewResolver)
+# =============================================================================
+
+
+class CachedEntityState(BaseModel):
+    """Cached state and attributes for a single entity."""
+
+    state: str = "unknown"
+    name: str = ""
+    unit: str = ""
+    icon: str = ""
+    device_class: str = ""
+
+
+# =============================================================================
 # Rendered models (output layer)
 # =============================================================================
 
@@ -307,7 +322,7 @@ class EntityBadgeConfig(BaseModel):
     show_name: bool | None = None
     show_state: bool = True
     show_icon: bool = True
-    state_content: str | None = None
+    state_content: str | list[str] | None = None
     visibility: list[VisibilityCondition] = Field(default_factory=list)
 
 
@@ -357,13 +372,52 @@ class HeadingCardConfig(BaseModel):
     visibility: list[VisibilityCondition] = Field(default_factory=list)
 
 
+class AutoEntitiesNotCondition(BaseModel):
+    """A single condition inside an auto-entities not.or list."""
+
+    model_config = ConfigDict(extra="allow")
+
+    state: str | None = None
+    label: str | None = None
+
+
+class AutoEntitiesNotFilter(BaseModel):
+    """Auto-entities 'not' filter with OR conditions."""
+
+    model_config = ConfigDict(extra="allow")
+
+    or_: list[AutoEntitiesNotCondition] = Field(default_factory=list, alias="or")
+
+
+class AutoEntitiesIncludeRule(BaseModel):
+    """A single include rule for auto-entities filter."""
+
+    model_config = ConfigDict(extra="allow")
+
+    entity_id: str | None = None
+    domain: str | None = None
+    integration: str | None = None
+    label: str | None = None
+    attributes: dict[str, Any] = Field(default_factory=dict)
+    options: dict[str, Any] = Field(default_factory=dict)
+    not_: AutoEntitiesNotFilter | None = Field(default=None, alias="not")
+
+
 class AutoEntitiesFilter(BaseModel):
     """Auto-entities filter configuration."""
 
     model_config = ConfigDict(extra="allow")
 
-    include: list[dict[str, Any]] = Field(default_factory=list)
+    include: list[AutoEntitiesIncludeRule] = Field(default_factory=list)
     exclude: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class AutoEntitiesInnerCardConfig(BaseModel):
+    """Inner card configuration for auto-entities (just the type matters for filtering)."""
+
+    model_config = ConfigDict(extra="allow")
+
+    type: str = ""
 
 
 class AutoEntitiesCardConfig(BaseModel):
@@ -372,9 +426,17 @@ class AutoEntitiesCardConfig(BaseModel):
     model_config = ConfigDict(extra="allow")
 
     type: Literal["custom:auto-entities"]
-    card: dict[str, Any] = Field(default_factory=dict)
+    card: AutoEntitiesInnerCardConfig = Field(default_factory=AutoEntitiesInnerCardConfig)
     filter: AutoEntitiesFilter = Field(default_factory=AutoEntitiesFilter)
     visibility: list[VisibilityCondition] = Field(default_factory=list)
+
+
+class LogbookTarget(BaseModel):
+    """Logbook card target configuration."""
+
+    model_config = ConfigDict(extra="allow")
+
+    entity_id: list[str] | str = Field(default_factory=list)
 
 
 class LogbookCardConfig(BaseModel):
@@ -383,7 +445,7 @@ class LogbookCardConfig(BaseModel):
     model_config = ConfigDict(extra="allow")
 
     type: Literal["logbook"]
-    target: dict[str, Any] = Field(default_factory=dict)
+    target: LogbookTarget = Field(default_factory=LogbookTarget)
     entities: list[str] | str = Field(default_factory=list)
     visibility: list[VisibilityCondition] = Field(default_factory=list)
 
