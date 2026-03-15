@@ -1087,11 +1087,14 @@ class RichViewRenderer:
     def pad_emoji(emoji: str, target_width: int = 2) -> str:
         """Pad emoji to consistent terminal cell width.
 
-        Many emojis (especially those with FE0F variation selectors or ZWJ
-        sequences) have cell_len that doesn't match their actual terminal
-        rendering width. This pads to a target width for consistent alignment.
+        Emoji with FE0F variation selectors render as 2 cells wide in
+        most terminals but cell_len() reports them as 1. We correct for
+        this so all icons align consistently.
         """
-        padding = max(0, target_width - cell_len(emoji))
+        width = cell_len(emoji)
+        if "\ufe0f" in emoji and width < 2:
+            width = 2
+        padding = max(0, target_width - width)
         return emoji + " " * padding
 
     def resolve_icon(self, icon: RenderedIcon) -> str:
