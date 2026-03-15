@@ -1,7 +1,6 @@
 """Utility functions for YAML formatting and file operations."""
 
 import subprocess
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -50,87 +49,65 @@ def git_has_changes(paths: list[str] | None = None) -> bool:
         return False
 
 
-@dataclass
-class GitStashResult:
-    """Result of a git stash operation."""
 
-    stashed: bool
-    message: str | None = None
-
-
-def git_stash(paths: list[str] | None = None) -> GitStashResult:
-    """Stash uncommitted changes if any exist.
+def git_read_file(path: str) -> str | None:
+    """Read a file's content from git HEAD.
 
     Args:
-        paths: Optional list of paths to stash. If None, stashes all changes.
+        path: Relative path within the repo (e.g., "automations/my_auto.yaml").
 
     Returns:
-        GitStashResult indicating whether changes were stashed.
-    """
-    if not git_has_changes(paths):
-        return GitStashResult(stashed=False)
-
-    try:
-        cmd = ["git", "stash", "push", "-m", "ha-sync autostash"]
-        if paths:
-            # Filter to only paths that have git changes (not just exist)
-            # Git stash fails on paths with no changes even if they exist
-            paths_with_changes = [p for p in paths if git_has_changes([p])]
-            if paths_with_changes:
-                cmd.append("--")
-                cmd.extend(paths_with_changes)
-        result = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            check=True,
-        )
-        # Check if something was actually stashed
-        if "No local changes to save" in result.stdout:
-            return GitStashResult(stashed=False)
-        return GitStashResult(stashed=True, message=result.stdout.strip())
-    except subprocess.CalledProcessError as e:
-        return GitStashResult(stashed=False, message=f"Stash failed: {e.stderr}")
-
-
-@dataclass
-class GitStashPopResult:
-    """Result of a git stash pop operation."""
-
-    success: bool
-    has_conflicts: bool
-    message: str | None = None
-
-
-def git_stash_pop() -> GitStashPopResult:
-    """Pop the most recent stash.
-
-    Returns:
-        GitStashPopResult with success status and conflict info.
+        File content as string, or None if the file doesn't exist in HEAD.
     """
     try:
         result = subprocess.run(
-            ["git", "stash", "pop"],
+            ["git", "show", f"HEAD:{path}"],
             capture_output=True,
             text=True,
-            check=False,  # Don't raise on conflict
+            check=False,
         )
         if result.returncode == 0:
-            return GitStashPopResult(success=True, has_conflicts=False)
-        # Check for merge conflicts
-        if "CONFLICT" in result.stdout or "CONFLICT" in result.stderr:
-            return GitStashPopResult(
-                success=False,
-                has_conflicts=True,
-                message="Conflicts detected. Resolve them before pushing.",
-            )
-        return GitStashPopResult(
-            success=False,
-            has_conflicts=False,
-            message=result.stderr.strip() or result.stdout.strip(),
+            return result.stdout
+        return None
+    except FileNotFoundError:
+        return None
+
+
+def git_list_files(directory: str) -> list[str]:
+    """List files tracked in git HEAD under a directory.
+
+    Args:
+        directory: Relative directory path (e.g., "automations").
+
+    Returns:
+        List of relative file paths (e.g., ["automations/my_auto.yaml"]).
+    """
+    try:
+        result = subprocess.run(
+            ["git", "ls-tree", "-r", "--name-only", "HEAD", directory],
+            capture_output=True,
+            text=True,
+            check=False,
         )
-    except subprocess.CalledProcessError as e:
-        return GitStashPopResult(success=False, has_conflicts=False, message=str(e))
+        if result.returncode == 0 and result.stdout.strip():
+            return result.stdout.strip().split("\n")
+        return []
+    except FileNotFoundError:
+        return []
+
+
+def git_has_commits() -> bool:
+    """Check if the git repo has any commits."""
+    try:
+        result = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        return result.returncode == 0
+    except FileNotFoundError:
+        return False
 
 
 class CleanDumper(yaml.SafeDumper):

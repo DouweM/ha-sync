@@ -28,13 +28,10 @@ class ScriptSyncer(SimpleEntitySyncer):
     @logfire.instrument("Fetch remote scripts")
     async def get_remote_entities(self) -> dict[str, dict[str, Any]]:
         """Get all scripts from Home Assistant."""
-        scripts = await self.client.get_scripts()
+        script_ids = await self.client.get_scripts()
         result: dict[str, dict[str, Any]] = {}
 
-        for script in scripts:
-            entity_id = script["entity_id"]
-            script_id = entity_id.replace("script.", "")
-
+        for script_id in script_ids:
             config = await self.client.get_script_config(script_id)
             if config:
                 result[script_id] = config

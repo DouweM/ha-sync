@@ -54,7 +54,7 @@ class TestScriptSyncerDiff:
 
         # Remote has the script with different content
         mock_ha_client.get_scripts.return_value = [
-            SampleScript.create_state("existing", "Original Script")
+            "existing"
         ]
         mock_ha_client.get_script_config.return_value = SampleScript.create(
             script_id="existing",
@@ -213,7 +213,7 @@ class TestScriptSyncerIntegration:
 
         # Remote has one script (to_modify) with different content
         mock_ha_client.get_scripts.return_value = [
-            SampleScript.create_state("to_modify", "Original Version")
+            "to_modify"
         ]
         mock_ha_client.get_script_config.return_value = SampleScript.create(
             script_id="to_modify",

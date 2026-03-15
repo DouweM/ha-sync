@@ -173,6 +173,7 @@ class TestDiffCommand:
             patch("ha_sync.cli.get_config") as mock_get_config,
             patch("ha_sync.cli.HAClient") as mock_ha_client_class,
             patch("ha_sync.cli.get_syncers_for_paths", new_callable=AsyncMock) as mock_get_syncers,
+            patch("ha_sync.cli.is_git_repo", return_value=False),
         ):
             mock_get_config.return_value = sync_config
             mock_ha_client_class.return_value.__aenter__ = AsyncMock()

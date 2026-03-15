@@ -28,13 +28,10 @@ class SceneSyncer(SimpleEntitySyncer):
     @logfire.instrument("Fetch remote scenes")
     async def get_remote_entities(self) -> dict[str, dict[str, Any]]:
         """Get all scenes from Home Assistant."""
-        scenes = await self.client.get_scenes()
+        scene_ids = await self.client.get_scenes()
         result: dict[str, dict[str, Any]] = {}
 
-        for scene in scenes:
-            entity_id = scene["entity_id"]
-            scene_id = entity_id.replace("scene.", "")
-
+        for scene_id in scene_ids:
             config = await self.client.get_scene_config(scene_id)
             if config:
                 result[scene_id] = config

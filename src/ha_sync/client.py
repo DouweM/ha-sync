@@ -57,6 +57,8 @@ class HAClient:
         self._ha_version: str | None = None
         # Cache for config entries (avoids redundant API calls during sync)
         self._config_entries_cache: list[dict[str, Any]] | None = None
+        # Cache for entity registry (avoids fetching /api/states for discovery)
+        self._entity_registry_cache: list[dict[str, Any]] | None = None
 
     @logfire.instrument("Connecting to Home Assistant")
     async def connect(self) -> None:
@@ -248,12 +250,14 @@ class HAClient:
     # --- Automation Commands ---
 
     @logfire.instrument("Get automations")
-    async def get_automations(self) -> list[dict[str, Any]]:
-        """Get all automations via REST API."""
-        response = await self.http.get("/api/states")
-        self._check_response(response)
-        states = response.json()
-        return [s for s in states if s["entity_id"].startswith("automation.")]
+    async def get_automations(self) -> list[str]:
+        """Get all automation config IDs via entity registry."""
+        entities = await self.get_entity_registry_cached()
+        return [
+            e["unique_id"]
+            for e in entities
+            if e.get("entity_id", "").startswith("automation.")
+        ]
 
     @logfire.instrument("Get automation config: {automation_id}")
     async def get_automation_config(self, automation_id: str) -> dict[str, Any]:
@@ -287,12 +291,14 @@ class HAClient:
     # --- Script Commands ---
 
     @logfire.instrument("Get scripts")
-    async def get_scripts(self) -> list[dict[str, Any]]:
-        """Get all scripts via states."""
-        response = await self.http.get("/api/states")
-        self._check_response(response)
-        states = response.json()
-        return [s for s in states if s["entity_id"].startswith("script.")]
+    async def get_scripts(self) -> list[str]:
+        """Get all script IDs via entity registry."""
+        entities = await self.get_entity_registry_cached()
+        return [
+            e["entity_id"].removeprefix("script.")
+            for e in entities
+            if e.get("entity_id", "").startswith("script.")
+        ]
 
     @logfire.instrument("Get script config: {script_id}")
     async def get_script_config(self, script_id: str) -> dict[str, Any]:
@@ -326,12 +332,14 @@ class HAClient:
     # --- Scene Commands ---
 
     @logfire.instrument("Get scenes")
-    async def get_scenes(self) -> list[dict[str, Any]]:
-        """Get all scenes via states."""
-        response = await self.http.get("/api/states")
-        self._check_response(response)
-        states = response.json()
-        return [s for s in states if s["entity_id"].startswith("scene.")]
+    async def get_scenes(self) -> list[str]:
+        """Get all scene IDs via entity registry."""
+        entities = await self.get_entity_registry_cached()
+        return [
+            e["entity_id"].removeprefix("scene.")
+            for e in entities
+            if e.get("entity_id", "").startswith("scene.")
+        ]
 
     @logfire.instrument("Get scene config: {scene_id}")
     async def get_scene_config(self, scene_id: str) -> dict[str, Any]:
@@ -900,6 +908,15 @@ class HAClient:
         result = await self.send_command("config/entity_registry/list")
         return result if isinstance(result, list) else []
 
+    async def get_entity_registry_cached(self) -> list[dict[str, Any]]:
+        """Get all entity registry entries, with in-memory caching.
+
+        Results are cached for the duration of the client session.
+        """
+        if self._entity_registry_cache is None:
+            self._entity_registry_cache = await self.get_entity_registry()
+        return self._entity_registry_cache
+
     @logfire.instrument("Get entity registry entry: {entity_id}")
     async def get_entity_registry_entry(self, entity_id: str) -> dict[str, Any] | None:
         """Get a single entity registry entry by entity_id."""
@@ -967,13 +984,6 @@ class HAClient:
     # --- Utility Methods ---
 
     # --- State Methods ---
-
-    @logfire.instrument("Get all states")
-    async def get_all_states(self) -> list[dict[str, Any]]:
-        """Get all entity states."""
-        response = await self.http.get("/api/states")
-        self._check_response(response)
-        return response.json()
 
     @logfire.instrument("Get entity state: {entity_id}")
     async def get_entity_state(self, entity_id: str) -> dict[str, Any] | None:
