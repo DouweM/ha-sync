@@ -941,7 +941,11 @@ async def _pull_three_way(
     async with HAClient(config.url, config.token) as client:
         syncers_with_filters = await get_syncers_for_paths(client, config, paths)
 
-        any_changes = False
+        # First pass: collect all diffs for preview
+        SyncerDiff = tuple[
+            BaseSyncer, list[ThreeWayDiffItem], list[ThreeWayDiffItem], dict[str, dict],
+        ]
+        syncer_diffs: list[SyncerDiff] = []
 
         for syncer, file_filters in syncers_with_filters:
             base = syncer.get_base_entities()
@@ -949,8 +953,10 @@ async def _pull_three_way(
             remote = await syncer.get_remote_entities()
 
             norm_fn = _get_normalize_fn(syncer)
+            fp_fn = _get_file_path_fn(syncer)
             tw_result = compute_three_way_diff(
-                base, local, remote, syncer.entity_type, normalize_fn=norm_fn,
+                base, local, remote, syncer.entity_type,
+                normalize_fn=norm_fn, file_path_fn=fp_fn,
             )
 
             # For pull, we care about:
@@ -960,50 +966,94 @@ async def _pull_three_way(
             conflicts = tw_result.conflicts
 
             if file_filters:
-                fp_fn = _get_file_path_fn(syncer)
                 remote_items = _filter_three_way_items(remote_items, file_filters, fp_fn)
                 conflicts = _filter_three_way_items(conflicts, file_filters, fp_fn)
 
-            if not remote_items and not conflicts:
+            if remote_items or conflicts:
+                syncer_diffs.append((syncer, remote_items, conflicts, remote))
+
+        if not syncer_diffs:
+            console.print("[dim]No changes to pull[/dim]")
+            return
+
+        # Show preview
+        all_remote = [item for _, remote_items, _, _ in syncer_diffs for item in remote_items]
+        all_conflicts = [item for _, _, conflicts, _ in syncer_diffs for item in conflicts]
+
+        if all_remote:
+            console.print("[bold]Remote changes (will be pulled):[/bold]\n")
+            for item in all_remote:
+                _print_three_way_item(item, side="remote")
+            console.print()
+
+        if all_conflicts:
+            console.print("[bold red]Conflicts (will NOT be pulled):[/bold red]\n")
+            for item in all_conflicts:
+                _print_three_way_item(item, side="both")
+            console.print(
+                "\n[yellow]Resolve conflicts with sync --theirs or --ours.[/yellow]\n"
+            )
+
+        if dry_run:
+            return
+
+        # Ask for confirmation
+        if not yes and not _ask_confirmation("pull these changes"):
+            console.print("[dim]Aborted[/dim]")
+            raise typer.Exit(0)
+
+        # Second pass: execute
+        for syncer, remote_items, _conflicts, remote in syncer_diffs:
+            if not remote_items:
                 continue
 
-            any_changes = True
             console.print(f"\n[bold]Pulling {syncer.entity_type}s...[/bold]")
 
-            # Pull only remote-changed entities
-            if remote_items:
-                # Build a remote dict with only the entities that need pulling
-                remote_to_pull = {
-                    item.entity_id: remote[item.entity_id]
-                    for item in remote_items
-                    if item.entity_id in remote
-                }
-                if remote_to_pull:
-                    result = await syncer.pull(
-                        sync_deletions=sync_deletions,
-                        dry_run=dry_run,
-                        remote=remote_to_pull,
-                    )
-                    if not result.has_changes:
-                        console.print("  [dim]No changes[/dim]")
+            # Split into additions/modifications vs deletions
+            remote_to_pull = {
+                item.entity_id: remote[item.entity_id]
+                for item in remote_items
+                if item.remote_status != "deleted" and item.entity_id in remote
+            }
+            remote_deletions = [
+                item for item in remote_items
+                if item.remote_status == "deleted"
+            ]
 
-            # Show conflicts
-            if conflicts:
-                console.print(f"\n  [bold red]Conflicts ({len(conflicts)}):[/bold red]")
-                for item in conflicts:
-                    fp = item.file_path or item.entity_id
-                    console.print(
-                        f"    [red]conflict[/red] {fp} "
-                        f"(local: {item.local_status}, remote: {item.remote_status})"
-                    )
-                if not dry_run:
-                    console.print(
-                        "\n  [yellow]Resolve conflicts manually, then push.[/yellow]"
-                    )
+            if remote_to_pull:
+                await syncer.pull(
+                    sync_deletions=False,
+                    dry_run=False,
+                    remote=remote_to_pull,
+                )
 
-        if not any_changes:
-            console.print("[dim]No changes to pull[/dim]")
+            # Handle remote deletions: delete local files
+            if remote_deletions:
+                _delete_local_files(syncer, remote_deletions)
 
+
+def _delete_local_files(syncer: BaseSyncer, items: list[ThreeWayDiffItem]) -> None:
+    """Delete local files for entities that were deleted remotely."""
+    from ha_sync.utils import relative_path
+
+    for item in items:
+        # Try to find the file from local data (_filename metadata)
+        local_data = item.local or item.base
+        file_path = None
+
+        if local_data and "_filename" in local_data:
+            file_path = syncer.local_path / local_data["_filename"]
+        elif item.file_path:
+            file_path = Path(item.file_path)
+            if not file_path.is_absolute():
+                file_path = Path.cwd() / file_path
+        elif hasattr(syncer, "get_filename"):
+            file_path = syncer.local_path / syncer.get_filename(item.entity_id, local_data or {})
+
+        if file_path and file_path.exists():
+            rel_path = relative_path(file_path)
+            file_path.unlink()
+            console.print(f"  [red]Deleted[/red] {rel_path}")
 
 
 async def _get_pull_diff(
@@ -1934,19 +1984,26 @@ async def _sync_three_way(
 
             console.print(f"\n[bold]Syncing {syncer.entity_type}s...[/bold]")
 
-            # Pull remote-only changes
+            # Pull remote-only changes (additions + modifications)
             if tw_result.remote_only:
                 remote_to_pull = {
                     item.entity_id: remote[item.entity_id]
                     for item in tw_result.remote_only
-                    if item.entity_id in remote
+                    if item.remote_status != "deleted" and item.entity_id in remote
                 }
+                remote_deletions = [
+                    item for item in tw_result.remote_only
+                    if item.remote_status == "deleted"
+                ]
+
                 if remote_to_pull:
                     await syncer.pull(
-                        sync_deletions=sync_deletions,
+                        sync_deletions=False,
                         dry_run=False,
                         remote=remote_to_pull,
                     )
+                if remote_deletions:
+                    _delete_local_files(syncer, remote_deletions)
 
             # Push local-only changes
             if tw_result.local_only:
@@ -1962,18 +2019,24 @@ async def _sync_three_way(
             # Handle conflicts
             if tw_result.conflicts:
                 if theirs:
-                    # Accept remote: pull conflicted entities
+                    # Accept remote: pull conflicted entities (additions + modifications)
                     remote_to_pull = {
                         item.entity_id: remote[item.entity_id]
                         for item in tw_result.conflicts
                         if item.entity_id in remote and item.remote_status != "deleted"
                     }
+                    remote_deletions = [
+                        item for item in tw_result.conflicts
+                        if item.remote_status == "deleted"
+                    ]
                     if remote_to_pull:
                         await syncer.pull(
-                            sync_deletions=sync_deletions,
+                            sync_deletions=False,
                             dry_run=False,
                             remote=remote_to_pull,
                         )
+                    if remote_deletions:
+                        _delete_local_files(syncer, remote_deletions)
                 elif ours:
                     # Keep local: push local versions
                     push_items = _three_way_to_diff_items(tw_result.conflicts, direction="push")
