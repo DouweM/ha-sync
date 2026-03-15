@@ -196,6 +196,17 @@ DOMAIN_EMOJI = {
     "vacuum": "🤖",
     "input_select": "📋",
     "input_button": "🔘",
+    "automation": "⚙️",
+    "script": "📜",
+    "scene": "🎭",
+    "group": "📦",
+    "timer": "⏱️",
+    "counter": "🔢",
+    "update": "⬇️",
+    "remote": "📡",
+    "siren": "📢",
+    "water_heater": "🔥",
+    "humidifier": "💧",
 }
 
 DEVICE_CLASS_EMOJI = {
@@ -220,6 +231,13 @@ DEVICE_CLASS_EMOJI = {
     "window": "🪟",
     "moisture": "💧",
     "gas": "🔥",
+    "connectivity": "📶",
+    "plug": "🔌",
+    "problem": "⚠️",
+    "safety": "⚠️",
+    "sound": "🔊",
+    "opening": "🚪",
+    "garage_door": "🚗",
 }
 
 
@@ -699,10 +717,13 @@ class ViewRenderer:
         except (json.JSONDecodeError, Exception):
             return []
 
-    async def render_auto_entities(self, card: dict[str, Any]) -> list[Text]:
-        """Render auto-entities card by evaluating the filter rules."""
-        lines: list[Text] = []
+    async def resolve_auto_entities(
+        self, card: dict[str, Any]
+    ) -> list[tuple[str, str, str, dict[str, Any]]]:
+        """Resolve auto-entities filter rules to matched entities.
 
+        Returns list of (entity_id, name, icon, options) tuples with state cache populated.
+        """
         card_config = card.get("card", {})
         if card_config.get("type") in ("custom:map-card", "logbook"):
             return []
@@ -791,9 +812,13 @@ class ViewRenderer:
                 seen.add(entity_id)
                 unique_entities.append((entity_id, options))
 
+        result: list[tuple[str, str, str, dict[str, Any]]] = []
         for entity_id, options in unique_entities:
             cached = self.state_cache.get(entity_id, {})
             state = cached.get("state", "")
+            if state in ("unavailable", "unknown", ""):
+                continue
+
             opt_name = options.get("name", "").strip()
             name = (
                 opt_name
@@ -801,10 +826,16 @@ class ViewRenderer:
                 else cached.get("name", "") or entity_id.split(".")[-1].replace("_", " ").title()
             )
             icon = options.get("icon", "") or cached.get("icon", "")
+            result.append((entity_id, name, icon, options))
 
-            if state in ("unavailable", "unknown", ""):
-                continue
+        return result
 
+    async def render_auto_entities(self, card: dict[str, Any]) -> list[Text]:
+        """Render auto-entities card by evaluating the filter rules."""
+        lines: list[Text] = []
+
+        for entity_id, name, icon, _options in await self.resolve_auto_entities(card):
+            state = self.state_cache.get(entity_id, {}).get("state", "")
             formatted_state, style = self.format_state(entity_id, state)
             emoji = self.get_icon_emoji(icon, entity_id)
 
@@ -818,9 +849,15 @@ class ViewRenderer:
 
         return lines
 
-    async def render_logbook(self, card: dict[str, Any], max_entries: int = 5) -> list[Text]:
-        """Render a logbook card showing recent state changes."""
-        lines: list[Text] = []
+    async def fetch_logbook_entries(
+        self, card: dict[str, Any], max_entries: int = 5
+    ) -> list[tuple[str, str, str, str, str]]:
+        """Fetch logbook entries for a card.
+
+        Returns list of (entity_id, name, state, formatted_state, time_str) tuples,
+        sorted by most recent first.
+        """
+        from datetime import UTC, datetime
 
         target = card.get("target", {})
         entity_ids = target.get("entity_id", [])
@@ -849,8 +886,6 @@ class ViewRenderer:
             return []
 
         entries: list[tuple[Any, str, str, str]] = []
-        from datetime import UTC, datetime
-
         for line in output.strip().split("\n"):
             parts = line.split("|||")
             if len(parts) >= 4:
@@ -869,12 +904,11 @@ class ViewRenderer:
                         pass
 
         entries.sort(reverse=True, key=lambda x: x[0])
-
         now = datetime.now(UTC)
 
+        result: list[tuple[str, str, str, str, str]] = []
         for last_changed, name, state, entity_id in entries[:max_entries]:
-            formatted_state, style = self.format_state(entity_id, state)
-
+            formatted_state, _ = self.format_state(entity_id, state)
             if not formatted_state:
                 continue
 
@@ -888,6 +922,19 @@ class ViewRenderer:
             else:
                 time_str = "just now"
 
+            result.append((entity_id, name, state, formatted_state, time_str))
+
+        return result
+
+    async def render_logbook(self, card: dict[str, Any], max_entries: int = 5) -> list[Text]:
+        """Render a logbook card showing recent state changes."""
+        lines: list[Text] = []
+
+        for entity_id, name, state, formatted_state, time_str in await self.fetch_logbook_entries(
+            card, max_entries
+        ):
+            _, style = self.format_state(entity_id, state)
+
             text = Text("  ")
             text.append(f"{name}: ", style="dim")
             text.append(formatted_state, style=style)
@@ -895,6 +942,53 @@ class ViewRenderer:
             lines.append(text)
 
         return lines
+
+    async def fetch_weather(self, card: dict[str, Any]) -> tuple[str, str, str] | None:
+        """Fetch weather data for a weather-forecast card.
+
+        Returns (condition, temperature_str, entity_id) or None.
+        """
+        entity_id = card.get("entity")
+        if not entity_id:
+            return None
+
+        state = self.get_state(entity_id)
+        if state in ("unavailable", "unknown"):
+            return None
+
+        # Get temperature from attributes via template
+        template = (
+            f'{{{{ state_attr("{entity_id}", "temperature") | default("", true) }}}}|||'
+            f'{{{{ state_attr("{entity_id}", "temperature_unit") | default("", true) }}}}'
+        )
+        try:
+            output = await self.eval_template(template)
+            parts = output.split("|||")
+            temp = parts[0].strip() if parts else ""
+            unit = parts[1].strip() if len(parts) > 1 else ""
+            try:
+                val = float(temp)
+                temp = str(int(val)) if val == int(val) else f"{val:.1f}"
+            except (ValueError, TypeError):
+                pass
+            temp_str = f"{temp}{unit}" if temp else ""
+        except Exception:
+            temp_str = ""
+
+        condition = state.replace("_", " ").replace("partlycloudy", "Partly Cloudy").title()
+        return condition, temp_str, entity_id
+
+    def render_weather(self, condition: str, temp_str: str, entity_id: str) -> Text:
+        """Render weather data as a Rich Text line."""
+        icon = self.state_cache.get(entity_id, {}).get("icon", "")
+        emoji = self.get_icon_emoji(icon, entity_id)
+
+        text = Text()
+        text.append(f"  {self.pad_emoji(emoji)} ")
+        text.append(condition, style="cyan")
+        if temp_str:
+            text.append(f"  {temp_str}")
+        return text
 
     async def render_card(self, card: dict[str, Any]) -> list[Text]:
         """Render a single card as a list of rich Text lines."""
@@ -914,6 +1008,11 @@ class ViewRenderer:
             return await self.render_auto_entities(card)
         elif card_type == "logbook":
             return await self.render_logbook(card)
+        elif card_type == "weather-forecast":
+            result = await self.fetch_weather(card)
+            if result:
+                return [self.render_weather(*result)]
+            return []
         elif card_type in ("custom:map-card", "history-graph", "custom:navbar-card"):
             return []
 
