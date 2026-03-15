@@ -275,9 +275,10 @@ class ViewResolver:
             '"name": {{ (e.name | default("")) | tojson }}, '
             '"icon": {{ (e.attributes.get("icon", "") | string) | tojson }}, '
             '"attributes": {'
-            '"known": {{ (e.attributes.get("known", "") | string) | tojson }}, '
-            '"device_class": {{ (e.attributes.get("device_class", "") | string) | tojson }}, '
-            '"friendly_name": {{ (e.attributes.get("friendly_name", "") | string) | tojson }}'
+            "{% for k, v in e.attributes.items() if v is string or v is number %}"
+            "{{ k | tojson }}: {{ v | string | tojson }}"
+            '{% if not loop.last %}, {% endif %}'
+            "{% endfor %}"
             "}}"
             "{% if not loop.last %},{% endif %}"
             "{% endfor %}]"
@@ -405,7 +406,7 @@ class ViewResolver:
                     content = rendered
                     if rendered.lower() in ("home", "oasis"):
                         content_color = SemanticColor.POSITIVE
-                    elif rendered in ("Away", "not_home"):
+                    elif rendered.lower() in ("away", "not_home"):
                         content_color = SemanticColor.INACTIVE
                     else:
                         content_color = SemanticColor.INFO
