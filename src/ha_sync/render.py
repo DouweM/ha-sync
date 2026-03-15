@@ -417,7 +417,7 @@ class ViewResolver:
                 if rendered and rendered != "[error]":
                     label = rendered
 
-            if not content and not label:
+            if not content and not label and not icon.mdi_name:
                 return None
 
             return RenderedTemplateBadge(
@@ -1170,7 +1170,9 @@ class RichViewRenderer:
             if badge.label:
                 text.append(f" ({badge.label})", style="dim")
 
-            return text if text.plain.strip() and text.plain.strip() != emoji.strip() else None
+            if not text.plain.strip():
+                return None
+            return text
 
         return None
 
