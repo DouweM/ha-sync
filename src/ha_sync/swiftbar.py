@@ -8,7 +8,7 @@ from typing import Any
 import yaml
 
 from ha_sync.client import HAClient
-from ha_sync.render import ViewRenderer
+from ha_sync.render import ViewResolver
 
 # MDI -> SF Symbol mapping (ported from watchOS IconMapper.swift)
 MDI_TO_SF_SYMBOL: dict[str, str] = {
@@ -459,7 +459,7 @@ def state_color(entity_id: str, state: str) -> str | None:
     return None
 
 
-class SwiftBarRenderer(ViewRenderer):
+class SwiftBarRenderer(ViewResolver):
     """Renders a Lovelace dashboard view as SwiftBar menu output."""
 
     def _sf_symbol(self, icon: str | None, entity_id: str | None = None) -> str:
@@ -562,16 +562,20 @@ class SwiftBarRenderer(ViewRenderer):
             label = badge.get("label")
             icon = badge.get("icon", "")
 
+            # Icon can be a template
+            if icon and "{" in icon:
+                icon = (await self.eval_template(icon, entity_id)).strip()
+
             sf = self._sf_symbol(icon, entity_id)
             parts = []
 
             if content:
-                rendered = await self.eval_template(content)
+                rendered = await self.eval_template(content, entity_id)
                 if rendered and rendered != "[error]":
                     parts.append(rendered)
 
             if label:
-                rendered = await self.eval_template(label)
+                rendered = await self.eval_template(label, entity_id)
                 if rendered and rendered != "[error]":
                     parts.append(f"({rendered})")
 
