@@ -134,30 +134,6 @@ struct CardRendererTests {
         #expect(result == nil)
     }
 
-    // MARK: - Weather card
-
-    @Test("Weather card renders with condition")
-    func weatherCard() {
-        let card = CardConfig(type: "weather-forecast", entity: "weather.home")
-        let state = EntityState(
-            entityId: "weather.home",
-            state: "partly_cloudy",
-            name: "Home Weather",
-            unit: "°C",
-            attributes: ["temperature": "18"]
-        )
-        let result = renderer.renderWeather(
-            card: card,
-            stateProvider: { $0 == "weather.home" ? state : nil }
-        )
-        guard case .weather(let weather) = result else {
-            Issue.record("Expected weather card")
-            return
-        }
-        #expect(weather.condition == "Partly Cloudy")
-        #expect(weather.temperature == "18°C")
-    }
-
     // MARK: - Camera card
 
     @Test("Camera card generates snapshot path")

@@ -74,7 +74,7 @@ public actor AutoEntitiesResolver {
                     state: entity.state,
                     name: entity.name,
                     icon: entity.icon ?? "",
-                    deviceClass: entity.attributes?.deviceClass ?? ""
+                    deviceClass: entity.attributes?["device_class"] ?? ""
                 ))
             }
         }
@@ -120,19 +120,7 @@ public actor AutoEntitiesResolver {
 
         for (attrName, attrValue) in required {
             let expected = attrValue.stringValue.lowercased()
-            let actual: String
-
-            switch attrName {
-            case "device_class":
-                actual = (entityAttrs?.deviceClass ?? "").lowercased()
-            case "friendly_name":
-                actual = (entityAttrs?.friendlyName ?? "").lowercased()
-            case "known":
-                actual = (entityAttrs?.known ?? "").lowercased()
-            default:
-                actual = ""
-            }
-
+            let actual = (entityAttrs?[attrName] ?? "").lowercased()
             if actual != expected { return false }
         }
 

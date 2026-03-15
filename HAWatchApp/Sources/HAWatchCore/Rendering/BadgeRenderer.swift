@@ -127,8 +127,9 @@ public struct BadgeRenderer: Sendable {
         case "yellow", "amber": return .yellow
         case "orange", "deep-orange": return .orange
         case "cyan", "teal": return .cyan
-        case "purple", "pink": return .cyan
-        case "grey", "dark-grey", "blue-grey", "brown", "indigo": return .dim
+        case "purple", "indigo": return .purple
+        case "pink": return .red
+        case "grey", "dark-grey", "blue-grey", "brown": return .dim
         default: return .cyan
         }
     }

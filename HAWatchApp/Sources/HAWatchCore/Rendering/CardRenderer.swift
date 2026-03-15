@@ -102,32 +102,6 @@ public struct CardRenderer: Sendable {
         return .autoEntities(RenderedAutoEntities(tiles: tiles))
     }
 
-    // MARK: - Weather card
-
-    /// Render a weather card.
-    public func renderWeather(
-        card: CardConfig,
-        stateProvider: (String) -> EntityState?
-    ) -> RenderedCard? {
-        guard let entityId = card.entity else { return nil }
-        guard let entityState = stateProvider(entityId) else { return nil }
-
-        let condition = entityState.state
-        let iconName = iconMapper.weatherSymbolName(for: condition)
-        let rawTemp = entityState.attributes["temperature"] ?? ""
-        let tempUnit = entityState.unit.isEmpty ? "°C" : entityState.unit
-        let temp = stateFormatter.formatTemperature(rawValue: rawTemp, unit: tempUnit) ?? entityState.state
-
-        let weather = RenderedWeather(
-            entityId: entityId,
-            condition: condition.replacingOccurrences(of: "_", with: " ").capitalized,
-            temperature: temp,
-            iconName: iconName
-        )
-
-        return .weather(weather)
-    }
-
     // MARK: - Camera card
 
     /// Render a camera/picture-entity card.

@@ -17,12 +17,13 @@ public enum StateColor: String, Codable, Sendable, Equatable {
     case blue
     case cyan
     case orange
+    case purple
     case dim
 
     /// Whether this is a "bright" active state color
     public var isActive: Bool {
         switch self {
-        case .green, .red, .yellow, .blue, .cyan, .orange:
+        case .green, .red, .yellow, .blue, .cyan, .orange, .purple:
             return true
         case .primary, .secondary, .dim:
             return false

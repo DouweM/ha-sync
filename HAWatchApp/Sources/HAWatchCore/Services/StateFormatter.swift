@@ -178,11 +178,15 @@ public struct StateFormatter: Sendable {
     }
 
     private func formatWeather(state: String) -> FormattedState {
-        var display = state
+        return FormattedState(text: formatWeatherCondition(state), color: .cyan)
+    }
+
+    /// Format a weather condition string for display (e.g. "partlycloudy" → "Partly Cloudy").
+    public func formatWeatherCondition(_ condition: String) -> String {
+        condition
             .replacingOccurrences(of: "_", with: " ")
             .replacingOccurrences(of: "partlycloudy", with: "Partly Cloudy")
-        display = display.capitalized
-        return FormattedState(text: display, color: .cyan)
+            .capitalized
     }
 
     /// Format a temperature value for display (e.g. "21°C", "22.5°F").

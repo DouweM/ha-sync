@@ -106,7 +106,7 @@ public actor TemplateService {
     /// Search entities by domain.
     public func searchEntities(domain: String) async throws -> [EntitySearchResult] {
         let template = """
-        [{% for e in states.\(domain) %}{"entity_id": {{ e.entity_id | tojson }}, "state": {{ e.state | tojson }}, "name": {{ (e.name | default("")) | tojson }}, "icon": {{ (e.attributes.get("icon", "") | string) | tojson }}, "attributes": {"known": {{ (e.attributes.get("known", "") | string) | tojson }}, "device_class": {{ (e.attributes.get("device_class", "") | string) | tojson }}, "friendly_name": {{ (e.attributes.get("friendly_name", "") | string) | tojson }}}}{% if not loop.last %},{% endif %}{% endfor %}]
+        [{% for e in states.\(domain) %}{"entity_id": {{ e.entity_id | tojson }}, "state": {{ e.state | tojson }}, "name": {{ (e.name | default("")) | tojson }}, "icon": {{ (e.attributes.get("icon", "") | string) | tojson }}, "attributes": {{% for k, v in e.attributes.items() if v is string or v is number %}{{ k | tojson }}: {{ v | string | tojson }}{% if not loop.last %}, {% endif %}{% endfor %}}}{% if not loop.last %},{% endif %}{% endfor %}]
         """
 
         let output = try await apiClient.renderTemplate(template)
@@ -152,15 +152,49 @@ public struct EntitySearchResult: Codable, Sendable {
     }
 }
 
+/// Generic attribute dictionary decoded from search results.
+/// Supports any string/numeric/boolean attribute value, coerced to String.
 public struct EntitySearchAttributes: Codable, Sendable {
-    public var known: String?
-    public var deviceClass: String?
-    public var friendlyName: String?
+    public var values: [String: String]
 
-    enum CodingKeys: String, CodingKey {
-        case known
-        case deviceClass = "device_class"
-        case friendlyName = "friendly_name"
+    public init(values: [String: String] = [:]) {
+        self.values = values
+    }
+
+    public subscript(key: String) -> String? {
+        values[key]
+    }
+
+    private struct DynamicKey: CodingKey {
+        var stringValue: String
+        var intValue: Int?
+        init?(stringValue: String) { self.stringValue = stringValue }
+        init?(intValue: Int) { self.stringValue = String(intValue); self.intValue = intValue }
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: DynamicKey.self)
+        var dict: [String: String] = [:]
+        for key in container.allKeys {
+            if let s = try? container.decode(String.self, forKey: key) {
+                dict[key.stringValue] = s
+            } else if let d = try? container.decode(Double.self, forKey: key) {
+                dict[key.stringValue] = d == Double(Int(d)) ? String(Int(d)) : String(d)
+            } else if let b = try? container.decode(Bool.self, forKey: key) {
+                dict[key.stringValue] = String(b)
+            }
+            // Skip complex types (arrays, objects) — not useful for attribute matching
+        }
+        self.values = dict
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: DynamicKey.self)
+        for (key, value) in values {
+            if let codingKey = DynamicKey(stringValue: key) {
+                try container.encode(value, forKey: codingKey)
+            }
+        }
     }
 }
 

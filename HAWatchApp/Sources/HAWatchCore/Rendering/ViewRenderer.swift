@@ -206,7 +206,7 @@ public actor ViewRenderer {
 
         let cards = section.cards ?? []
         var items: [RenderedSectionItem] = []
-        var pendingHeading: CardConfig?
+        var pendingHeading: RenderedHeading?
 
         for card in cards {
             if card.type == "heading", let headingText = card.heading, !headingText.isEmpty {
@@ -218,15 +218,13 @@ public actor ViewRenderer {
                 guard let heading = heading else { continue }
 
                 if let existing = pendingHeading {
-                    if let h = await buildHeadingAsync(card: existing, stateProvider: stateProvider) {
-                        items.append(.spacing)
-                        items.append(.heading(h))
-                    }
+                    items.append(.spacing)
+                    items.append(.heading(existing))
                     pendingHeading = nil
                 }
 
                 if heading.badges.isEmpty {
-                    pendingHeading = card
+                    pendingHeading = heading
                 } else {
                     items.append(.spacing)
                     items.append(.heading(heading))
@@ -240,11 +238,9 @@ public actor ViewRenderer {
             )
 
             if let renderedCard = renderedCard {
-                if let pending = pendingHeading {
-                    if let h = await buildHeadingAsync(card: pending, stateProvider: stateProvider) {
-                        items.append(.spacing)
-                        items.append(.heading(h))
-                    }
+                if let existing = pendingHeading {
+                    items.append(.spacing)
+                    items.append(.heading(existing))
                     pendingHeading = nil
                 }
                 items.append(.card(renderedCard))
@@ -557,8 +553,8 @@ public actor ViewRenderer {
                     forecastItems.append(WeatherForecastItem(
                         day: dayLabel,
                         iconName: iconMapper.weatherSymbolName(for: item.condition),
-                        tempHigh: "\(Int(item.temp))°",
-                        tempLow: item.templow.isEmpty ? nil : "\(item.templow)°"
+                        tempHigh: stateFormatter.formatTemperature(rawValue: String(item.temp), unit: tempUnit) ?? "\(Int(item.temp))°",
+                        tempLow: item.templow.isEmpty ? nil : stateFormatter.formatTemperature(rawValue: item.templow, unit: tempUnit) ?? "\(item.templow)°"
                     ))
                 }
             }
@@ -566,7 +562,7 @@ public actor ViewRenderer {
 
         return .weather(RenderedWeather(
             entityId: entityId,
-            condition: condition.replacingOccurrences(of: "_", with: " ").capitalized,
+            condition: stateFormatter.formatWeatherCondition(condition),
             temperature: temp,
             iconName: iconName,
             forecast: forecastItems

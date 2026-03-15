@@ -21,6 +21,7 @@ extension StateColor {
         case .blue: return .blue
         case .cyan: return .cyan
         case .orange: return .orange
+        case .purple: return .purple
         case .dim: return .secondary
         }
     }

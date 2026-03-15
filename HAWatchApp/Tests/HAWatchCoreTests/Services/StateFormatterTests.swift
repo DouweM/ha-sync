@@ -231,7 +231,25 @@ struct StateFormatterTests {
     @Test("Weather partly cloudy")
     func weatherPartlyCloudy() {
         let result = formatter.format(entityId: "weather.home", state: "partlycloudy")
+        #expect(result.text == "Partly Cloudy")
         #expect(result.color == .cyan)
+    }
+
+    @Test("formatWeatherCondition handles partlycloudy")
+    func weatherConditionPartlyCloudy() {
+        #expect(formatter.formatWeatherCondition("partlycloudy") == "Partly Cloudy")
+    }
+
+    @Test("formatWeatherCondition handles underscored states")
+    func weatherConditionUnderscored() {
+        #expect(formatter.formatWeatherCondition("partly_cloudy") == "Partly Cloudy")
+        #expect(formatter.formatWeatherCondition("clear_night") == "Clear Night")
+    }
+
+    @Test("formatWeatherCondition handles simple states")
+    func weatherConditionSimple() {
+        #expect(formatter.formatWeatherCondition("sunny") == "Sunny")
+        #expect(formatter.formatWeatherCondition("rainy") == "Rainy")
     }
 
     // MARK: - Unavailable / Unknown
