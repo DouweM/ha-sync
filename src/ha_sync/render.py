@@ -131,7 +131,9 @@ class ViewResolver:
                             "device_class": device_class,
                         }
             except Exception as e:
-                console.print(f"[dim]Warning: Failed to fetch states for batch: {e}[/dim]")
+                console.print(
+                    f"[dim]Warning: Failed to fetch states for batch: {type(e).__name__}: {e}[/dim]"
+                )
 
         # Fill in missing icons from entity registry (platform-provided icons)
         missing_icon_entities = [
@@ -296,7 +298,12 @@ class ViewResolver:
     # -- Icon helper --
 
     def _make_icon(self, icon: str | None, entity_id: str | None = None) -> RenderedIcon:
-        """Create a RenderedIcon from a raw icon string and entity context."""
+        """Create a RenderedIcon from a raw icon string and entity context.
+
+        For weather entities without an explicit icon, uses the condition state
+        as the icon name (e.g. "weather-partlycloudy") so renderers can map to
+        condition-specific symbols.
+        """
         mdi_name: str | None = None
         if icon:
             mdi_name = icon.replace("mdi:", "").lower()
@@ -304,6 +311,16 @@ class ViewResolver:
         device_class: str | None = None
         if entity_id:
             device_class = self.state_cache.get(entity_id, {}).get("device_class", "") or None
+
+        # Weather entities: use condition as icon for condition-based SF Symbol lookup
+        if (
+            not mdi_name
+            and entity_id
+            and entity_id.startswith("weather.")
+        ):
+            state = self.get_state(entity_id)
+            if state not in ("unavailable", "unknown"):
+                mdi_name = f"weather-{state.replace('_', '-')}"
 
         return RenderedIcon(
             mdi_name=mdi_name,

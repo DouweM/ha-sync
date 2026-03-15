@@ -2,13 +2,23 @@
 
 from collections.abc import Generator
 from contextlib import contextmanager
-from pathlib import Path
-from typing import Any
+from typing import Any, ClassVar
 
-import yaml
-
-from ha_sync.client import HAClient
-from ha_sync.render import ViewResolver
+from ha_sync.render_models import (
+    RenderedAutoEntities,
+    RenderedBadge,
+    RenderedEntityBadge,
+    RenderedHeading,
+    RenderedIcon,
+    RenderedLogbook,
+    RenderedSection,
+    RenderedSpacing,
+    RenderedTemplateBadge,
+    RenderedTile,
+    RenderedView,
+    RenderedWeather,
+    SemanticColor,
+)
 
 # MDI -> SF Symbol mapping (ported from watchOS IconMapper.swift)
 MDI_TO_SF_SYMBOL: dict[str, str] = {
@@ -342,26 +352,6 @@ WEATHER_CONDITION_TO_SF_SYMBOL: dict[str, str] = {
     "windy-variant": "wind",
 }
 
-# State -> color mapping for SwiftBar
-STATE_COLORS: dict[str, str] = {
-    "home": "green",
-    "on": "#F5A623",
-    "locked": "green",
-    "closed": "green",
-    "armed_home": "green",
-    "armed_away": "green",
-    "armed_night": "green",
-    "armed_vacation": "green",
-    "triggered": "red",
-    "unavailable": "gray",
-    "unknown": "gray",
-    "off": "gray",
-    "not_home": "gray",
-    "idle": "gray",
-    "standby": "gray",
-    "disarmed": "gray",
-}
-
 
 # --- SwiftBar output helpers ---
 
@@ -410,365 +400,176 @@ def xbar_kv(label: str, value: str, **params: Any) -> None:
 # --- SF Symbol resolution ---
 
 
-def get_sf_symbol(
-    icon: str | None,
-    entity_id: str | None = None,
-    device_class: str | None = None,
-) -> str:
-    """Resolve an MDI icon to an SF Symbol name."""
-    if not icon and entity_id:
-        if device_class and device_class in DEVICE_CLASS_TO_SF_SYMBOL:
-            return DEVICE_CLASS_TO_SF_SYMBOL[device_class]
-        domain = entity_id.split(".")[0]
+def resolve_sf_symbol(icon: RenderedIcon) -> str:
+    """Resolve a RenderedIcon to an SF Symbol name."""
+    mdi_name = icon.mdi_name
+
+    if not mdi_name and icon.entity_id:
+        if icon.device_class and icon.device_class in DEVICE_CLASS_TO_SF_SYMBOL:
+            return DEVICE_CLASS_TO_SF_SYMBOL[icon.device_class]
+        domain = icon.entity_id.split(".")[0]
         return DOMAIN_TO_SF_SYMBOL.get(domain, "circle.fill")
 
-    if not icon:
+    if not mdi_name:
         return "circle.fill"
 
-    icon_name = icon.replace("mdi:", "").lower()
-
     # Direct lookup
-    if icon_name in MDI_TO_SF_SYMBOL:
-        return MDI_TO_SF_SYMBOL[icon_name]
+    if mdi_name in MDI_TO_SF_SYMBOL:
+        return MDI_TO_SF_SYMBOL[mdi_name]
+
+    # Weather condition lookup (HA states like "weather-partlycloudy")
+    if mdi_name.startswith("weather-"):
+        condition = mdi_name.removeprefix("weather-")
+        if condition in WEATHER_CONDITION_TO_SF_SYMBOL:
+            return WEATHER_CONDITION_TO_SF_SYMBOL[condition]
 
     # Partial match
     for key, symbol in MDI_TO_SF_SYMBOL.items():
-        if key in icon_name:
+        if key in mdi_name:
             return symbol
 
     # Fallback to device class / domain
-    if device_class and device_class in DEVICE_CLASS_TO_SF_SYMBOL:
-        return DEVICE_CLASS_TO_SF_SYMBOL[device_class]
-    if entity_id:
-        domain = entity_id.split(".")[0]
+    if icon.device_class and icon.device_class in DEVICE_CLASS_TO_SF_SYMBOL:
+        return DEVICE_CLASS_TO_SF_SYMBOL[icon.device_class]
+    if icon.entity_id:
+        domain = icon.entity_id.split(".")[0]
         return DOMAIN_TO_SF_SYMBOL.get(domain, "circle.fill")
 
     return "circle.fill"
 
 
-def state_color(entity_id: str, state: str) -> str | None:
-    """Get SwiftBar color for an entity state."""
-    if state in STATE_COLORS:
-        return STATE_COLORS[state]
+class SwiftBarViewRenderer:
+    """Renders a RenderedView as SwiftBar menu bar output.
 
-    domain = entity_id.split(".")[0]
-    if domain == "person" and state not in ("home", "not_home"):
-        return "#4A90D9"  # Blue for named zones
-    if domain in ("light", "switch", "fan", "input_boolean") and state == "on":
-        return "#F5A623"
-    return None
+    Pure, sync transformation: RenderedView -> stdout print calls.
+    No HAClient, no async, no data fetching.
+    """
 
+    SEMANTIC_COLOR_MAP: ClassVar[dict[SemanticColor, str]] = {
+        SemanticColor.INACTIVE: "gray",
+        SemanticColor.POSITIVE: "green",
+        SemanticColor.ACTIVE: "#F5A623",
+        SemanticColor.WARNING: "#F5A623",
+        SemanticColor.DANGER: "red",
+        SemanticColor.INFO: "#4A90D9",
+        SemanticColor.HEAT: "red",
+        SemanticColor.COOL: "#4A90D9",
+    }
 
-class SwiftBarRenderer(ViewResolver):
-    """Renders a Lovelace dashboard view as SwiftBar menu output."""
+    def _resolve_color(self, color: SemanticColor | None) -> str | None:
+        if color is None:
+            return None
+        return self.SEMANTIC_COLOR_MAP.get(color)
 
-    def _sf_symbol(self, icon: str | None, entity_id: str | None = None) -> str:
-        """Get SF Symbol for an icon/entity."""
-        # Weather entities: use condition-based symbol
-        if entity_id and entity_id.startswith("weather."):
-            state = self.get_state(entity_id)
-            if state and state in WEATHER_CONDITION_TO_SF_SYMBOL:
-                return WEATHER_CONDITION_TO_SF_SYMBOL[state]
-        device_class = self.state_cache.get(entity_id or "", {}).get("device_class", "")
-        return get_sf_symbol(icon, entity_id, device_class)
+    def _resolve_icon(self, icon: RenderedIcon) -> str:
+        """Resolve icon to SF Symbol, with weather condition override."""
+        return resolve_sf_symbol(icon)
 
-    def _state_color(self, entity_id: str, state: str) -> str | None:
-        return state_color(entity_id, state)
+    def _resolve_weather_icon(self, weather: RenderedWeather) -> str:
+        """Use condition-based SF Symbol for weather entities."""
+        return WEATHER_CONDITION_TO_SF_SYMBOL.get(weather.raw_condition, "cloud.fill")
 
-    async def render_view(self, view_path: Path, user: str | None = None) -> None:
-        """Render a dashboard view as SwiftBar output."""
-        if not view_path.exists():
-            xbar("View not found", sfimage="exclamationmark.triangle.fill", color="red")
-            return
-
-        with open(view_path) as f:
-            view = yaml.safe_load(f)
-
-        if not view:
-            xbar("Parse error", sfimage="exclamationmark.triangle.fill", color="red")
-            return
-
-        # Set up user
-        if user:
-            self.user_ids = await self.fetch_user_ids()
-            user_name = user.lower()
-            if user_name in self.user_ids:
-                self.current_user = self.user_ids[user_name]
-            else:
-                xbar("Unknown user", sfimage="exclamationmark.triangle.fill", color="red")
-                return
-
-        # Fetch all entity states
-        entities: set[str] = set()
-        self.extract_entities(view, entities)
-        await self.fetch_all_states(entities)
-
+    def render(self, view: RenderedView) -> None:
+        """Render a RenderedView as SwiftBar output to stdout."""
         # Menu bar header (icon only)
-        icon = view.get("icon", "")
-        sf = self._sf_symbol(icon)
+        sf = self._resolve_icon(view.icon)
         xbar(sfimage=sf)
 
         xbar_sep()
 
         # Badges
-        for badge in view.get("badges", []):
-            line = await self._render_badge_swiftbar(badge)
-            if line:
-                text, params = line
-                xbar(text, **params)
+        for badge in view.badges:
+            self._render_badge(badge)
 
         # Sections
-        for section in view.get("sections", []):
-            await self._render_section_swiftbar(section)
+        for section in view.sections:
+            self._render_section(section)
 
         # Footer
         xbar_sep()
         xbar("Refresh", sfimage="arrow.clockwise", refresh=True)
 
-    async def _render_badge_swiftbar(
-        self, badge: dict[str, Any]
-    ) -> tuple[str, dict[str, Any]] | None:
-        """Render a badge as (text, params) for SwiftBar."""
-        if not self.check_visibility(badge.get("visibility", [])):
-            return None
-
-        badge_type = badge.get("type", "entity")
-
-        if badge_type == "entity":
-            entity_id = badge.get("entity")
-            if not entity_id:
-                return None
-
-            state = self.get_state(entity_id)
-            name = badge.get("name") or self.get_display_name(entity_id)
-            icon = badge.get("icon") or self.state_cache.get(entity_id, {}).get("icon", "")
-            show_state = badge.get("show_state", True)  # noqa: F841
-            state_content = badge.get("state_content")
-
-            sf = self._sf_symbol(icon, entity_id)
-            formatted, _ = self.format_state(entity_id, state)
-
-            text = f"{name}\t{formatted}" if state_content != "name" and formatted else name
-
+    def _render_badge(self, badge: RenderedBadge) -> None:
+        if isinstance(badge, RenderedEntityBadge):
+            sf = self._resolve_icon(badge.icon)
+            state_text = badge.state.text
+            text = f"{badge.name}\t{state_text}" if state_text else badge.name
             params: dict[str, Any] = {"sfimage": sf}
-            color = self._state_color(entity_id, state)
+            color = self._resolve_color(badge.state.color)
             if color:
                 params["sfcolor"] = color
-            return text, params
+            xbar(text, **params)
 
-        elif badge_type == "custom:mushroom-template-badge":
-            entity_id = badge.get("entity")
-            content = badge.get("content")
-            label = badge.get("label")
-            icon = badge.get("icon", "")
-
-            # Icon can be a template
-            if icon and "{" in icon:
-                icon = (await self.eval_template(icon, entity_id)).strip()
-
-            sf = self._sf_symbol(icon, entity_id)
+        elif isinstance(badge, RenderedTemplateBadge):
+            sf = self._resolve_icon(badge.icon)
             parts = []
-
-            if content:
-                rendered = await self.eval_template(content, entity_id)
-                if rendered and rendered != "[error]":
-                    parts.append(rendered)
-
-            if label:
-                rendered = await self.eval_template(label, entity_id)
-                if rendered and rendered != "[error]":
-                    parts.append(f"({rendered})")
-
+            if badge.content:
+                parts.append(badge.content)
+            if badge.label:
+                parts.append(f"({badge.label})")
             if not parts:
-                return None
-
+                return
             text = " ".join(parts)
             params = {"sfimage": sf}
+            color = self._resolve_color(badge.content_color)
+            if color:
+                params["sfcolor"] = color
+            xbar(text, **params)
 
-            # Color based on content
-            if parts:
-                val = parts[0].lower()
-                if val in ("home", "oasis"):
-                    params["sfcolor"] = "green"
-                elif val in ("away", "not_home"):
-                    params["sfcolor"] = "gray"
-                else:
-                    params["sfcolor"] = "#4A90D9"
-
-            return text, params
-
-        return None
-
-    async def _render_section_swiftbar(self, section: dict[str, Any]) -> None:
-        """Render a section as SwiftBar output."""
-        if not self.check_visibility(section.get("visibility", [])):
-            return
-
-        cards = section.get("cards", [])
-        pending_heading: dict[str, Any] | None = None
-
-        for card in cards:
-            card_type = card.get("type", "")
-
-            if card_type == "heading" and card.get("heading"):
-                if not self.check_visibility(card.get("visibility", [])):
-                    continue
-
-                # Emit previous pending heading (had no non-heading content)
-                if pending_heading:
-                    await self._emit_heading_swiftbar(pending_heading)
-
-                # Check if this heading has badges (inline content)
-                heading_badges = card.get("badges", [])
-                heading_badge_items = []
-                for badge in heading_badges:
-                    rendered = await self._render_badge_swiftbar(badge)
-                    if rendered:
-                        heading_badge_items.append(rendered)
-
-                if heading_badge_items:
-                    # Heading with badges — emit immediately
-                    xbar_sep()
-                    self._render_heading_swiftbar(card)
-                    for text, params in heading_badge_items:
-                        xbar(text, **params)
-                    pending_heading = None
-                else:
-                    pending_heading = card
-                continue
-
-            card_items = await self._render_card_swiftbar(card)
-
-            if card_items and pending_heading:
+    def _render_section(self, section: RenderedSection) -> None:
+        for item in section.items:
+            if isinstance(item, RenderedSpacing):
                 xbar_sep()
-                self._render_heading_swiftbar(pending_heading)
-                pending_heading = None
+            elif isinstance(item, RenderedHeading):
+                self._render_heading(item)
+            elif isinstance(item, RenderedTile):
+                self._render_tile(item)
+            elif isinstance(item, RenderedAutoEntities):
+                for tile in item.tiles:
+                    self._render_tile(tile)
+            elif isinstance(item, RenderedLogbook):
+                for entry in item.entries:
+                    sf = self._resolve_icon(entry.icon)
+                    text = f"{entry.name}\t{entry.state.text} ({entry.time_ago})"
+                    params: dict[str, Any] = {"sfimage": sf}
+                    color = self._resolve_color(entry.state.color)
+                    if color:
+                        params["sfcolor"] = color
+                    xbar(text, **params)
+            elif isinstance(item, RenderedWeather):
+                sf = self._resolve_weather_icon(item)
+                text = (
+                    f"{item.condition}\t{item.temperature}" if item.temperature else item.condition
+                )
+                xbar(text, sfimage=sf, sfcolor="#4A90D9")
 
-            for text, params in card_items:
-                xbar(text, **params)
+    def _render_heading(self, heading: RenderedHeading) -> None:
+        sf = self._resolve_icon(heading.icon)
+        xbar(heading.heading, sfimage=sf, size=13)
+        for badge in heading.badges:
+            self._render_badge(badge)
 
-        # Emit trailing heading with no content
-        if pending_heading:
-            await self._emit_heading_swiftbar(pending_heading)
-
-    async def _emit_heading_swiftbar(self, card: dict[str, Any]) -> None:
-        """Emit a heading that had no subsequent card content."""
-        xbar_sep()
-        self._render_heading_swiftbar(card)
-        for badge in card.get("badges", []):
-            rendered = await self._render_badge_swiftbar(badge)
-            if rendered:
-                text, params = rendered
-                xbar(text, **params)
-
-    def _render_heading_swiftbar(self, card: dict[str, Any]) -> None:
-        """Render a heading card as SwiftBar output."""
-        if not self.check_visibility(card.get("visibility", [])):
-            return
-
-        heading = card.get("heading", "")
-        icon = card.get("icon", "")
-        sf = self._sf_symbol(icon) if icon else "circle.fill"
-
-        xbar(heading, sfimage=sf, size=13)
-
-    async def _render_card_swiftbar(
-        self, card: dict[str, Any]
-    ) -> list[tuple[str, dict[str, Any]]]:
-        """Render a card as a list of (text, params) for SwiftBar."""
-        if not self.check_visibility(card.get("visibility", [])):
-            return []
-
-        card_type = card.get("type", "")
-
-        if card_type == "tile":
-            item = self._render_tile_swiftbar(card)
-            return [item] if item else []
-        elif card_type == "custom:auto-entities":
-            return await self._render_auto_entities_swiftbar(card)
-        elif card_type == "logbook":
-            return await self._render_logbook_swiftbar(card)
-        elif card_type == "weather-forecast":
-            result = await self.fetch_weather(card)
-            if result:
-                condition, temp_str, entity_id = result
-                state = self.get_state(entity_id)
-                sf = WEATHER_CONDITION_TO_SF_SYMBOL.get(state, "cloud.fill")
-                text = f"{condition}\t{temp_str}" if temp_str else condition
-                return [(text, {"sfimage": sf, "sfcolor": "#4A90D9"})]
-            return []
-
-        return []
-
-    def _render_tile_swiftbar(
-        self, card: dict[str, Any]
-    ) -> tuple[str, dict[str, Any]] | None:
-        """Render a tile card as (text, params) for SwiftBar."""
-        if not self.check_visibility(card.get("visibility", [])):
-            return None
-
-        entity_id = card.get("entity")
-        if not entity_id:
-            return None
-
-        state = self.get_state(entity_id)
-        name = card.get("name") or self.get_display_name(entity_id)
-        icon = card.get("icon") or self.state_cache.get(entity_id, {}).get("icon", "")
-
-        sf = self._sf_symbol(icon, entity_id)
-        formatted, _ = self.format_state(entity_id, state)
-
-        text = f"{name}\t{formatted}" if formatted else name
+    def _render_tile(self, tile: RenderedTile) -> None:
+        sf = self._resolve_icon(tile.icon)
+        state_text = tile.state.text
+        text = f"{tile.name}\t{state_text}" if state_text else tile.name
         params: dict[str, Any] = {"sfimage": sf}
-        color = self._state_color(entity_id, state)
+        color = self._resolve_color(tile.state.color)
         if color:
             params["sfcolor"] = color
-        return text, params
-
-    async def _render_auto_entities_swiftbar(
-        self, card: dict[str, Any]
-    ) -> list[tuple[str, dict[str, Any]]]:
-        """Render auto-entities card as SwiftBar items."""
-        items: list[tuple[str, dict[str, Any]]] = []
-
-        for entity_id, name, icon, _options in await self.resolve_auto_entities(card):
-            state = self.state_cache.get(entity_id, {}).get("state", "")
-            sf = self._sf_symbol(icon, entity_id)
-            formatted, _ = self.format_state(entity_id, state)
-
-            text = f"{name}\t{formatted}" if formatted else name
-            params: dict[str, Any] = {"sfimage": sf}
-            color = self._state_color(entity_id, state)
-            if color:
-                params["sfcolor"] = color
-            items.append((text, params))
-
-        return items
-
-    async def _render_logbook_swiftbar(
-        self, card: dict[str, Any], max_entries: int = 5
-    ) -> list[tuple[str, dict[str, Any]]]:
-        """Render logbook card as SwiftBar items."""
-        items: list[tuple[str, dict[str, Any]]] = []
-
-        for entity_id, name, state, formatted, time_str in await self.fetch_logbook_entries(
-            card, max_entries
-        ):
-            icon = self.state_cache.get(entity_id, {}).get("icon", "")
-            sf = self._sf_symbol(icon, entity_id)
-            text = f"{name}\t{formatted} ({time_str})"
-            params: dict[str, Any] = {"sfimage": sf}
-            color = self._state_color(entity_id, state)
-            if color:
-                params["sfcolor"] = color
-            items.append((text, params))
-
-        return items
+        xbar(text, **params)
 
 
 async def render_view_swiftbar(
-    client: HAClient, view_path: Path, user: str | None = None
+    client: "HAClient", view_path: "Path", user: str | None = None  # noqa: F821
 ) -> None:
     """Render a dashboard view file as SwiftBar output."""
-    renderer = SwiftBarRenderer(client)
-    await renderer.render_view(view_path, user)
+    from ha_sync.render import ViewResolver
+
+    resolver = ViewResolver(client)
+    try:
+        view = await resolver.resolve_view(view_path, user=user)
+    except (FileNotFoundError, ValueError) as e:
+        xbar(str(e), sfimage="exclamationmark.triangle.fill", color="red")
+        return
+    SwiftBarViewRenderer().render(view)
