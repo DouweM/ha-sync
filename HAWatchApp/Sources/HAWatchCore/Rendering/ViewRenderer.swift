@@ -505,7 +505,13 @@ public actor ViewRenderer {
                 timeAgo = "just now"
             }
 
-            return LogbookEntry(name: name, state: formatted, timeAgo: timeAgo)
+            let iconStr = stateProvider(entityId)?.icon ?? ""
+            let logbookIconName = iconMapper.sfSymbolName(
+                for: iconStr,
+                entityId: entityId,
+                deviceClass: stateProvider(entityId)?.deviceClass ?? ""
+            )
+            return LogbookEntry(name: name, state: formatted, timeAgo: timeAgo, iconName: logbookIconName)
         }
 
         return cardRenderer.renderLogbook(entries: logbookEntries)
@@ -563,6 +569,7 @@ public actor ViewRenderer {
         return .weather(RenderedWeather(
             entityId: entityId,
             condition: stateFormatter.formatWeatherCondition(condition),
+            rawCondition: condition,
             temperature: temp,
             iconName: iconName,
             forecast: forecastItems

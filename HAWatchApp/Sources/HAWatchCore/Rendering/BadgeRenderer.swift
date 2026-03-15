@@ -75,19 +75,19 @@ public struct BadgeRenderer: Sendable {
 
         if let content = contentResult, !content.isEmpty {
             name = content
-            let color: StateColor
+            let color: SemanticColor
             // Use explicit badge color if provided
             if let badgeColor = badge.color?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased(),
                !badgeColor.isEmpty {
-                color = stateColorFromString(badgeColor)
+                color = semanticColorFromString(badgeColor)
             } else {
                 let lower = content.lowercased()
                 if lower == "home" || lower == "oasis" {
-                    color = .green
+                    color = .positive
                 } else if lower == "away" || lower == "not_home" {
-                    color = .dim
+                    color = .inactive
                 } else {
-                    color = .cyan
+                    color = .info
                 }
             }
             state = FormattedState(text: content, color: color)
@@ -119,18 +119,15 @@ public struct BadgeRenderer: Sendable {
         )
     }
 
-    private func stateColorFromString(_ color: String) -> StateColor {
+    private func semanticColorFromString(_ color: String) -> SemanticColor {
         switch color {
-        case "red": return .red
-        case "green": return .green
-        case "blue", "light-blue": return .blue
-        case "yellow", "amber": return .yellow
-        case "orange", "deep-orange": return .orange
-        case "cyan", "teal": return .cyan
-        case "purple", "indigo": return .purple
-        case "pink": return .red
-        case "grey", "dark-grey", "blue-grey", "brown": return .dim
-        default: return .cyan
+        case "red", "pink": return .danger
+        case "green": return .positive
+        case "blue", "light-blue", "cyan", "teal": return .info
+        case "yellow", "amber", "orange", "deep-orange": return .warning
+        case "purple", "indigo": return .info
+        case "grey", "dark-grey", "blue-grey", "brown": return .inactive
+        default: return .info
         }
     }
 

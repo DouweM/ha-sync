@@ -10,19 +10,19 @@ struct EntityStateText: View {
     }
 }
 
-extension StateColor {
+extension SemanticColor {
     var swiftUIColor: Color {
         switch self {
         case .primary: return .primary
         case .secondary: return .secondary
-        case .green: return .green
-        case .red: return .red
-        case .yellow: return .yellow
-        case .blue: return .blue
-        case .cyan: return .cyan
-        case .orange: return .orange
-        case .purple: return .purple
-        case .dim: return .secondary
+        case .inactive: return .secondary
+        case .positive: return .green
+        case .active: return .yellow
+        case .warning: return .yellow
+        case .danger: return .red
+        case .info: return .cyan
+        case .heat: return .red
+        case .cool: return .blue
         }
     }
 }

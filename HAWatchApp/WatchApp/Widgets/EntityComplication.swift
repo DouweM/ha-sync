@@ -12,7 +12,7 @@ struct EntityComplicationEntry: TimelineEntry {
     let entityName: String
     let stateText: String
     let iconName: String
-    let stateColor: StateColor
+    let stateColor: SemanticColor
     let numericValue: Double?
 }
 

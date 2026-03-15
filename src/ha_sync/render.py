@@ -406,7 +406,7 @@ class ViewResolver:
                     content = rendered
                     if rendered.lower() in ("home", "oasis"):
                         content_color = SemanticColor.POSITIVE
-                    elif rendered in ("Away", "not_home"):
+                    elif rendered.lower() in ("away", "not_home"):
                         content_color = SemanticColor.INACTIVE
                     else:
                         content_color = SemanticColor.INFO

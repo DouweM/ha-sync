@@ -1,5 +1,6 @@
 /// Formats entity state values for display.
-/// Port of render.py:415-506.
+/// Pure function — testable without a Home Assistant connection.
+/// Single source of truth for state formatting across all renderers.
 public struct StateFormatter: Sendable {
     public static let shared = StateFormatter()
 
@@ -11,7 +12,7 @@ public struct StateFormatter: Sendable {
     ///   - state: The raw state string
     ///   - deviceClass: Optional device class (for binary_sensor)
     ///   - unit: Optional unit of measurement (for sensor)
-    /// - Returns: FormattedState with display text and color
+    /// - Returns: FormattedState with display text and semantic color
     public func format(
         entityId: String,
         state: String,
@@ -21,7 +22,7 @@ public struct StateFormatter: Sendable {
         let domain = entityId.split(separator: ".").first.map(String.init) ?? ""
 
         if state == "unavailable" || state == "unknown" {
-            return FormattedState(text: "?", color: .dim)
+            return FormattedState(text: "?", color: .inactive)
         }
 
         switch domain {
@@ -53,29 +54,29 @@ public struct StateFormatter: Sendable {
     private func formatPerson(state: String) -> FormattedState {
         switch state {
         case "home":
-            return FormattedState(text: "Home", color: .green)
+            return FormattedState(text: "Home", color: .positive)
         case "not_home":
-            return FormattedState(text: "Away", color: .dim)
+            return FormattedState(text: "Away", color: .inactive)
         default:
-            return FormattedState(text: state, color: .cyan)
+            return FormattedState(text: state, color: .info)
         }
     }
 
     private func formatLock(state: String) -> FormattedState {
         switch state {
         case "locked":
-            return FormattedState(text: "Locked", color: .green)
+            return FormattedState(text: "Locked", color: .positive)
         default:
-            return FormattedState(text: "Unlocked", color: .red)
+            return FormattedState(text: "Unlocked", color: .danger)
         }
     }
 
     private func formatCover(state: String) -> FormattedState {
         switch state {
         case "closed":
-            return FormattedState(text: "Closed", color: .green)
+            return FormattedState(text: "Closed", color: .positive)
         default:
-            return FormattedState(text: state.capitalized, color: .yellow)
+            return FormattedState(text: state.capitalized, color: .warning)
         }
     }
 
@@ -83,65 +84,71 @@ public struct StateFormatter: Sendable {
         switch deviceClass {
         case "door", "window", "garage_door", "opening":
             if state == "on" {
-                return FormattedState(text: "Open", color: .yellow)
+                return FormattedState(text: "Open", color: .warning)
             }
-            return FormattedState(text: "Closed", color: .green)
+            return FormattedState(text: "Closed", color: .positive)
 
         case "motion":
             if state == "on" {
-                return FormattedState(text: "Motion", color: .yellow)
+                return FormattedState(text: "Motion", color: .warning)
             }
-            return FormattedState(text: "Clear", color: .dim)
+            return FormattedState(text: "Clear", color: .inactive)
 
         case "occupancy":
             if state == "on" {
-                return FormattedState(text: "Occupied", color: .yellow)
+                return FormattedState(text: "Occupied", color: .active)
             }
-            return FormattedState(text: "Empty", color: .dim)
+            return FormattedState(text: "Empty", color: .inactive)
 
         case "connectivity", "plug", "power":
             if state == "on" {
-                return FormattedState(text: "Connected", color: .green)
+                return FormattedState(text: "Connected", color: .positive)
             }
-            return FormattedState(text: "Disconnected", color: .dim)
+            return FormattedState(text: "Disconnected", color: .inactive)
 
         case "battery":
             if state == "on" {
-                return FormattedState(text: "Low", color: .red)
+                return FormattedState(text: "Low", color: .danger)
             }
-            return FormattedState(text: "OK", color: .green)
+            return FormattedState(text: "OK", color: .positive)
 
         case "problem":
             if state == "on" {
-                return FormattedState(text: "Problem", color: .red)
+                return FormattedState(text: "Problem", color: .danger)
             }
-            return FormattedState(text: "OK", color: .green)
+            return FormattedState(text: "OK", color: .positive)
 
         default:
             if state == "on" {
-                return FormattedState(text: "On", color: .yellow)
+                return FormattedState(text: "On", color: .warning)
             }
-            return FormattedState(text: "Off", color: .dim)
+            return FormattedState(text: "Off", color: .inactive)
         }
     }
 
     private func formatToggle(state: String) -> FormattedState {
         if state == "on" {
-            return FormattedState(text: "On", color: .yellow)
+            return FormattedState(text: "On", color: .active)
         }
-        return FormattedState(text: "Off", color: .dim)
+        return FormattedState(text: "Off", color: .inactive)
     }
 
     private func formatAlarm(state: String) -> FormattedState {
         switch state {
         case "disarmed":
-            return FormattedState(text: "Disarmed", color: .dim)
+            return FormattedState(text: "Disarmed", color: .inactive)
         case "armed_home":
-            return FormattedState(text: "Armed", color: .green)
+            return FormattedState(text: "Armed home", color: .positive)
         case "armed_away":
-            return FormattedState(text: "Armed", color: .green)
+            return FormattedState(text: "Armed away", color: .positive)
+        case "armed_night":
+            return FormattedState(text: "Armed night", color: .positive)
+        case "armed_vacation":
+            return FormattedState(text: "Armed vacation", color: .positive)
+        case "armed_custom_bypass":
+            return FormattedState(text: "Armed custom", color: .positive)
         case "triggered":
-            return FormattedState(text: "TRIGGERED", color: .red)
+            return FormattedState(text: "TRIGGERED", color: .danger)
         default:
             return FormattedState(text: state, color: .primary)
         }
@@ -150,13 +157,13 @@ public struct StateFormatter: Sendable {
     private func formatClimate(state: String) -> FormattedState {
         switch state {
         case "off":
-            return FormattedState(text: "Off", color: .dim)
+            return FormattedState(text: "Off", color: .inactive)
         case "heat":
-            return FormattedState(text: "Heating", color: .red)
+            return FormattedState(text: "Heating", color: .heat)
         case "cool":
-            return FormattedState(text: "Cooling", color: .blue)
+            return FormattedState(text: "Cooling", color: .cool)
         case "heat_cool", "auto":
-            return FormattedState(text: "Auto", color: .cyan)
+            return FormattedState(text: "Auto", color: .info)
         default:
             return FormattedState(text: state.capitalized, color: .primary)
         }
@@ -178,7 +185,7 @@ public struct StateFormatter: Sendable {
     }
 
     private func formatWeather(state: String) -> FormattedState {
-        return FormattedState(text: formatWeatherCondition(state), color: .cyan)
+        return FormattedState(text: formatWeatherCondition(state), color: .info)
     }
 
     /// Format a weather condition string for display (e.g. "partlycloudy" → "Partly Cloudy").

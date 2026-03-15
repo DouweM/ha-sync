@@ -140,17 +140,21 @@ public struct LogbookEntry: Sendable {
     public var name: String
     public var state: FormattedState
     public var timeAgo: String
+    public var iconName: String?
 
-    public init(name: String, state: FormattedState, timeAgo: String) {
+    public init(name: String, state: FormattedState, timeAgo: String, iconName: String? = nil) {
         self.name = name
         self.state = state
         self.timeAgo = timeAgo
+        self.iconName = iconName
     }
 }
 
 public struct RenderedWeather: Sendable {
     public var entityId: String
     public var condition: String
+    /// Raw HA weather state (e.g. "partlycloudy") for condition-based icon lookup.
+    public var rawCondition: String
     public var temperature: String
     public var iconName: String
     public var forecast: [WeatherForecastItem]
@@ -158,12 +162,14 @@ public struct RenderedWeather: Sendable {
     public init(
         entityId: String,
         condition: String,
+        rawCondition: String = "",
         temperature: String,
         iconName: String,
         forecast: [WeatherForecastItem] = []
     ) {
         self.entityId = entityId
         self.condition = condition
+        self.rawCondition = rawCondition
         self.temperature = temperature
         self.iconName = iconName
         self.forecast = forecast
