@@ -250,6 +250,7 @@ class ViewRenderer:
         self.user_ids: dict[str, str] = {}
         self.current_user: str | None = None
         self.label_cache: dict[str, set[str]] = {}
+        self.registry_icons: dict[str, str] = {}
 
     async def fetch_user_ids(self) -> dict[str, str]:
         """Fetch user name to ID mapping from HA person entities."""
@@ -325,6 +326,27 @@ class ViewRenderer:
                         }
             except Exception as e:
                 console.print(f"[dim]Warning: Failed to fetch states for batch: {e}[/dim]")
+
+        # Fill in missing icons from entity registry (platform-provided icons)
+        missing_icon_entities = [
+            eid for eid, cached in self.state_cache.items() if not cached.get("icon")
+        ]
+        if missing_icon_entities:
+            await self._fetch_registry_icons(missing_icon_entities)
+
+    async def _fetch_registry_icons(self, entity_ids: list[str]) -> None:
+        """Fetch icons from entity registry for entities missing icon attributes."""
+        try:
+            registry = await self.client.get_entity_registry_cached()
+            registry_by_id = {e["entity_id"]: e for e in registry if "entity_id" in e}
+            for entity_id in entity_ids:
+                entry = registry_by_id.get(entity_id)
+                if entry:
+                    icon = entry.get("icon") or entry.get("original_icon") or ""
+                    if icon and entity_id in self.state_cache:
+                        self.state_cache[entity_id]["icon"] = icon
+        except Exception:
+            pass  # Registry not available, fall back to domain/device_class
 
     def get_state(self, entity_id: str) -> str:
         """Get current state of an entity from cache."""
@@ -569,7 +591,7 @@ class ViewRenderer:
             state = self.get_state(entity_id)
             name = badge.get("name")
             icon = badge.get("icon") or self.state_cache.get(entity_id, {}).get("icon", "")
-            show_state = badge.get("show_state", True)
+            show_state = badge.get("show_state", True)  # noqa: F841
             state_content = badge.get("state_content")
 
             emoji = self.get_icon_emoji(icon, entity_id) if badge.get("show_icon", True) else ""
@@ -580,7 +602,7 @@ class ViewRenderer:
                 text.append(f"{self.pad_emoji(emoji)} ")
             text.append(f"{display_name}")
 
-            if state_content != "name" and show_state:
+            if state_content != "name":
                 formatted, style = self.format_state(entity_id, state)
                 if formatted:
                     text.append(": ")

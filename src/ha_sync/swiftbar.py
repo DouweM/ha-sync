@@ -388,6 +388,12 @@ def xbar(text: str | None = None, **params: Any) -> None:
     if text:
         segments.append(str(text))
 
+    # Default to disabling emoji/symbol interpretation in dropdown items
+    # to prevent SwiftBar from misinterpreting colons or text as emoji
+    if _xbar_nesting > 0 or text:
+        params.setdefault("emojize", False)
+        params.setdefault("symbolize", False)
+
     params_segments = [f"{key}={value}" for key, value in params.items() if value is not None]
     if params_segments:
         segments.append("|")
@@ -458,6 +464,11 @@ class SwiftBarRenderer(ViewRenderer):
 
     def _sf_symbol(self, icon: str | None, entity_id: str | None = None) -> str:
         """Get SF Symbol for an icon/entity."""
+        # Weather entities: use condition-based symbol
+        if entity_id and entity_id.startswith("weather."):
+            state = self.get_state(entity_id)
+            if state and state in WEATHER_CONDITION_TO_SF_SYMBOL:
+                return WEATHER_CONDITION_TO_SF_SYMBOL[state]
         device_class = self.state_cache.get(entity_id or "", {}).get("device_class", "")
         return get_sf_symbol(icon, entity_id, device_class)
 
@@ -510,6 +521,10 @@ class SwiftBarRenderer(ViewRenderer):
         for section in view.get("sections", []):
             await self._render_section_swiftbar(section)
 
+        # Footer
+        xbar_sep()
+        xbar("Refresh", sfimage="arrow.clockwise", refresh=True)
+
     async def _render_badge_swiftbar(
         self, badge: dict[str, Any]
     ) -> tuple[str, dict[str, Any]] | None:
@@ -527,16 +542,13 @@ class SwiftBarRenderer(ViewRenderer):
             state = self.get_state(entity_id)
             name = badge.get("name") or self.get_display_name(entity_id)
             icon = badge.get("icon") or self.state_cache.get(entity_id, {}).get("icon", "")
-            show_state = badge.get("show_state", True)
+            show_state = badge.get("show_state", True)  # noqa: F841
             state_content = badge.get("state_content")
 
             sf = self._sf_symbol(icon, entity_id)
             formatted, _ = self.format_state(entity_id, state)
 
-            if state_content != "name" and show_state and formatted:
-                text = f"{name}\t{formatted}"
-            else:
-                text = name
+            text = f"{name}\t{formatted}" if state_content != "name" and formatted else name
 
             params: dict[str, Any] = {"sfimage": sf}
             color = self._state_color(entity_id, state)
@@ -637,21 +649,13 @@ class SwiftBarRenderer(ViewRenderer):
 
     async def _emit_heading_swiftbar(self, card: dict[str, Any]) -> None:
         """Emit a heading that had no subsequent card content."""
-        heading_badges = card.get("badges", [])
-        heading_badge_items = []
-        for badge in heading_badges:
+        xbar_sep()
+        self._render_heading_swiftbar(card)
+        for badge in card.get("badges", []):
             rendered = await self._render_badge_swiftbar(badge)
             if rendered:
-                heading_badge_items.append(rendered)
-
-        if heading_badge_items:
-            xbar_sep()
-            self._render_heading_swiftbar(card)
-            for text, params in heading_badge_items:
+                text, params = rendered
                 xbar(text, **params)
-        else:
-            xbar_sep()
-            self._render_heading_swiftbar(card)
 
     def _render_heading_swiftbar(self, card: dict[str, Any]) -> None:
         """Render a heading card as SwiftBar output."""
@@ -748,7 +752,7 @@ class SwiftBarRenderer(ViewRenderer):
         ):
             icon = self.state_cache.get(entity_id, {}).get("icon", "")
             sf = self._sf_symbol(icon, entity_id)
-            text = f"{name}: {formatted} ({time_str})"
+            text = f"{name}\t{formatted} ({time_str})"
             params: dict[str, Any] = {"sfimage": sf}
             color = self._state_color(entity_id, state)
             if color:
