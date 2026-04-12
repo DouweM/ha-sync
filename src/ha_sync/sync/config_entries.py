@@ -61,6 +61,7 @@ CONFIG_ENTRY_HELPER_DOMAINS = {
     "random",
     "statistics",
     "mold_indicator",
+    "history_stats",
 }
 
 # Models for known helper types (for proper field ordering)
@@ -88,6 +89,7 @@ ENTITY_DOMAIN_MAP: dict[str, str] = {
     "trend": "binary_sensor",
     "random": "sensor",  # Can also be binary_sensor
     "mold_indicator": "sensor",
+    "history_stats": "sensor",
     "switch_as_x": "light",  # Can be various types
 }
 
