@@ -252,7 +252,7 @@ def test_normalize_fn_applied() -> None:
     assert len(result.local_only) == 1
 
     # With normalize that strips NAME: no change
-    def strip_name(data: dict) -> dict:
+    def strip_name(entity_id: str, data: dict) -> dict:
         return {"id": data["id"]}
 
     result = compute_three_way_diff(base, local, remote, "automation", normalize_fn=strip_name)

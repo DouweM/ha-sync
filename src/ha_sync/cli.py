@@ -1032,6 +1032,7 @@ async def _pull_three_way(
 
 def _delete_local_files(syncer: BaseSyncer, items: list[ThreeWayDiffItem]) -> None:
     """Delete local files for entities that were deleted remotely."""
+    from ha_sync.sync.base import SimpleEntitySyncer
     from ha_sync.utils import relative_path
 
     for item in items:
@@ -1045,12 +1046,8 @@ def _delete_local_files(syncer: BaseSyncer, items: list[ThreeWayDiffItem]) -> No
             file_path = Path(item.file_path)
             if not file_path.is_absolute():
                 file_path = Path.cwd() / file_path
-        else:
-            get_filename = getattr(syncer, "get_filename", None)
-            if callable(get_filename):
-                filename = get_filename(item.entity_id, local_data or {})
-                if isinstance(filename, str):
-                    file_path = syncer.local_path / filename
+        elif isinstance(syncer, SimpleEntitySyncer):
+            file_path = syncer.local_path / syncer.get_filename(item.entity_id, local_data or {})
 
         if file_path and file_path.exists():
             rel_path = relative_path(file_path)
@@ -1416,30 +1413,62 @@ async def _diff_three_way(config: SyncConfig, paths: list[str] | None) -> None:
 
 def _get_normalize_fn(
     syncer: BaseSyncer,
-) -> Callable[[dict[str, Any]], dict[str, Any]] | None:
-    """Get a normalize function for a syncer, if available."""
+) -> Callable[[str, dict[str, Any]], dict[str, Any]] | None:
+    """Get a normalize function for a syncer, if available.
+
+    Returns a function with signature (entity_id, data) -> normalized_data.
+    The entity_id is used to inject missing 'id' fields (e.g., HA's script
+    and scene config APIs omit the id from the response body).
+    """
     from ha_sync.sync.automations import AutomationSyncer
-    from ha_sync.sync.base import SimpleEntitySyncer
+    from ha_sync.sync.base import ConfigEntryBasedSyncer, SimpleEntitySyncer
+    from ha_sync.sync.config_entries import ConfigEntrySyncer
     from ha_sync.sync.dashboards import DashboardSyncer
 
     if isinstance(syncer, AutomationSyncer):
         from ha_sync.models import Automation
 
-        def norm_auto(data: dict[str, Any]) -> dict[str, Any]:
+        def norm_auto(entity_id: str, data: dict[str, Any]) -> dict[str, Any]:
             clean = {k: v for k, v in data.items() if not k.startswith("_")}
+            if "id" not in clean:
+                clean = {"id": entity_id, **clean}
             return Automation.normalize(clean)
 
         return norm_auto
     elif isinstance(syncer, SimpleEntitySyncer):
 
-        def norm_simple(data: dict[str, Any]) -> dict[str, Any]:
+        def norm_simple(entity_id: str, data: dict[str, Any]) -> dict[str, Any]:
             clean = {k: v for k, v in data.items() if not k.startswith("_")}
+            if "id" not in clean:
+                clean = {"id": entity_id, **clean}
             return syncer.normalize(clean)
 
         return norm_simple
+    elif isinstance(syncer, ConfigEntryBasedSyncer):
+
+        def norm_config_entry_based(entity_id: str, data: dict[str, Any]) -> dict[str, Any]:
+            clean = {k: v for k, v in data.items() if k not in ("_filename", "subtype")}
+            subtype = data.get("subtype")
+            if subtype:
+                model_class = syncer._get_model_for_subtype(subtype)
+                if model_class:
+                    try:
+                        return model_class.normalize(clean)
+                    except Exception:
+                        pass
+            return clean
+
+        return norm_config_entry_based
+    elif isinstance(syncer, ConfigEntrySyncer):
+
+        def norm_config_entry(entity_id: str, data: dict[str, Any]) -> dict[str, Any]:
+            clean = {k: v for k, v in data.items() if k != "_filename"}
+            return syncer._normalize(clean)
+
+        return norm_config_entry
     elif isinstance(syncer, DashboardSyncer):
 
-        def norm_dashboard(data: dict[str, Any]) -> dict[str, Any]:
+        def norm_dashboard(entity_id: str, data: dict[str, Any]) -> dict[str, Any]:
             if "config" in data:
                 return {"config": syncer._normalize_config(data["config"])}
             return data
