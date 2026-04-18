@@ -24,7 +24,7 @@ Manage your dashboards, automations, scripts, scenes, and helpers as code. Pull 
 | Helpers | Timer, counter, schedule helpers |
 | Helpers | Template sensors, binary sensors, switches |
 | Helpers | Group sensors, binary sensors, lights |
-| Helpers | Utility meters, integrations, thresholds, time of day |
+| Helpers | Utility meters, integrations, thresholds, time of day, history stats |
 
 ## Installation
 
@@ -218,6 +218,7 @@ After `ha-sync init`, your directory looks like:
 │       ├── _meta.yaml        # Dashboard metadata
 │       └── 00_<view>.yaml    # View files (prefixed for ordering)
 └── helpers/                  # All helper entities
+    ├── history_stats/        # History Stats helpers
     ├── input_boolean/        # Input boolean helpers
     ├── input_number/         # Input number helpers
     ├── input_select/         # Input select helpers
