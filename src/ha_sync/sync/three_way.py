@@ -47,7 +47,7 @@ def compute_three_way_diff(
     local: dict[str, dict[str, Any]],
     remote: dict[str, dict[str, Any]],
     entity_type: str,
-    normalize_fn: Callable[[dict[str, Any]], dict[str, Any]] | None = None,
+    normalize_fn: Callable[[str, dict[str, Any]], dict[str, Any]] | None = None,
     file_path_fn: Callable[[str], str | None] | None = None,
 ) -> ThreeWayDiffResult:
     """Compute a three-way diff between base, local, and remote states.
@@ -61,6 +61,7 @@ def compute_three_way_diff(
         remote: Entities from HA API.
         entity_type: Type label for diff items (e.g., "automation").
         normalize_fn: Optional function to normalize entity data for comparison.
+                      Signature: (entity_id, data) -> normalized_data.
         file_path_fn: Optional function to get file path from entity ID.
 
     Returns:
@@ -69,9 +70,9 @@ def compute_three_way_diff(
     result = ThreeWayDiffResult()
     all_ids = set(base) | set(local) | set(remote)
 
-    def norm(data: dict[str, Any]) -> dict[str, Any]:
+    def norm(entity_id: str, data: dict[str, Any]) -> dict[str, Any]:
         if normalize_fn is not None:
-            return normalize_fn(data)
+            return normalize_fn(entity_id, data)
         return data
 
     def get_file_path(entity_id: str) -> str | None:
@@ -84,9 +85,9 @@ def compute_three_way_diff(
         local_data = local.get(entity_id)
         remote_data = remote.get(entity_id)
 
-        base_norm = norm(base_data) if base_data is not None else None
-        local_norm = norm(local_data) if local_data is not None else None
-        remote_norm = norm(remote_data) if remote_data is not None else None
+        base_norm = norm(entity_id, base_data) if base_data is not None else None
+        local_norm = norm(entity_id, local_data) if local_data is not None else None
+        remote_norm = norm(entity_id, remote_data) if remote_data is not None else None
 
         local_status = _compute_status(base_norm, local_norm)
         remote_status = _compute_status(base_norm, remote_norm)
