@@ -47,6 +47,11 @@ app = typer.Typer(
 console = Console()
 
 
+type SyncerDiff = tuple[
+    "BaseSyncer", list[ThreeWayDiffItem], list[ThreeWayDiffItem], dict[str, dict]
+]
+
+
 # WebSocket-based helper types (under helpers/)
 WEBSOCKET_HELPER_TYPES = {
     "input_boolean",
@@ -942,9 +947,6 @@ async def _pull_three_way(
         syncers_with_filters = await get_syncers_for_paths(client, config, paths)
 
         # First pass: collect all diffs for preview
-        SyncerDiff = tuple[
-            BaseSyncer, list[ThreeWayDiffItem], list[ThreeWayDiffItem], dict[str, dict],
-        ]
         syncer_diffs: list[SyncerDiff] = []
 
         for syncer, file_filters in syncers_with_filters:
@@ -1047,8 +1049,12 @@ def _delete_local_files(syncer: BaseSyncer, items: list[ThreeWayDiffItem]) -> No
             file_path = Path(item.file_path)
             if not file_path.is_absolute():
                 file_path = Path.cwd() / file_path
-        elif hasattr(syncer, "get_filename"):
-            file_path = syncer.local_path / syncer.get_filename(item.entity_id, local_data or {})
+        else:
+            get_filename = getattr(syncer, "get_filename", None)
+            if callable(get_filename):
+                filename = get_filename(item.entity_id, local_data or {})
+                if isinstance(filename, str):
+                    file_path = syncer.local_path / filename
 
         if file_path and file_path.exists():
             rel_path = relative_path(file_path)
