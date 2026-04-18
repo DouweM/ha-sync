@@ -255,9 +255,7 @@ def test_normalize_fn_applied() -> None:
     def strip_name(data: dict) -> dict:
         return {"id": data["id"]}
 
-    result = compute_three_way_diff(
-        base, local, remote, "automation", normalize_fn=strip_name
-    )
+    result = compute_three_way_diff(base, local, remote, "automation", normalize_fn=strip_name)
     assert not result.has_changes
 
 
@@ -270,9 +268,7 @@ def test_file_path_fn() -> None:
     def fp(entity_id: str) -> str:
         return f"automations/{entity_id}.yaml"
 
-    result = compute_three_way_diff(
-        base, local, remote, "automation", file_path_fn=fp
-    )
+    result = compute_three_way_diff(base, local, remote, "automation", file_path_fn=fp)
 
     assert result.local_only[0].file_path == "automations/a.yaml"
 

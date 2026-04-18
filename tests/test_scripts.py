@@ -53,9 +53,7 @@ class TestScriptSyncerDiff:
         )
 
         # Remote has the script with different content
-        mock_ha_client.get_scripts.return_value = [
-            "existing"
-        ]
+        mock_ha_client.get_scripts.return_value = ["existing"]
         mock_ha_client.get_script_config.return_value = SampleScript.create(
             script_id="existing",
             alias="Original Script",
@@ -212,9 +210,7 @@ class TestScriptSyncerIntegration:
         create_script_file(temp_sync_dir, script_id="to_modify", alias="Modified Version")
 
         # Remote has one script (to_modify) with different content
-        mock_ha_client.get_scripts.return_value = [
-            "to_modify"
-        ]
+        mock_ha_client.get_scripts.return_value = ["to_modify"]
         mock_ha_client.get_script_config.return_value = SampleScript.create(
             script_id="to_modify",
             alias="Original Version",

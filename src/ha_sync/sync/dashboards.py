@@ -166,7 +166,7 @@ class DashboardSyncer(BaseSyncer):
                 continue
             # Extract dir_name from path: dashboards/<dir_name>/<file>.yaml
             if file_path.startswith(local_path_str):
-                rel = file_path[len(local_path_str) + 1:]
+                rel = file_path[len(local_path_str) + 1 :]
             else:
                 rel = file_path
             parts = Path(rel).parts

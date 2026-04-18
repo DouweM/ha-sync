@@ -566,9 +566,7 @@ class SwiftBarViewRenderer:
         xbar(text, **params)
 
 
-async def render_view_swiftbar(
-    client: HAClient, view_path: Path, user: str | None = None
-) -> None:
+async def render_view_swiftbar(client: HAClient, view_path: Path, user: str | None = None) -> None:
     """Render a dashboard view file as SwiftBar output."""
     from ha_sync.render import ViewResolver
 

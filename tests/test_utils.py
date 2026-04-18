@@ -46,11 +46,15 @@ def _init_git_repo(path: Path) -> None:
     subprocess.run(["git", "init"], cwd=path, capture_output=True, check=True)
     subprocess.run(
         ["git", "config", "user.email", "test@test.com"],
-        cwd=path, capture_output=True, check=True,
+        cwd=path,
+        capture_output=True,
+        check=True,
     )
     subprocess.run(
         ["git", "config", "user.name", "Test"],
-        cwd=path, capture_output=True, check=True,
+        cwd=path,
+        capture_output=True,
+        check=True,
     )
 
 
@@ -64,11 +68,14 @@ def test_git_read_file(tmp_path: Path) -> None:
     subprocess.run(["git", "add", "test.yaml"], cwd=tmp_path, capture_output=True, check=True)
     subprocess.run(
         ["git", "commit", "-m", "init"],
-        cwd=tmp_path, capture_output=True, check=True,
+        cwd=tmp_path,
+        capture_output=True,
+        check=True,
     )
 
     # Read from HEAD
     import os
+
     old_cwd = os.getcwd()
     try:
         os.chdir(tmp_path)
@@ -90,10 +97,13 @@ def test_git_read_file_not_found(tmp_path: Path) -> None:
     subprocess.run(["git", "add", "."], cwd=tmp_path, capture_output=True, check=True)
     subprocess.run(
         ["git", "commit", "-m", "init"],
-        cwd=tmp_path, capture_output=True, check=True,
+        cwd=tmp_path,
+        capture_output=True,
+        check=True,
     )
 
     import os
+
     old_cwd = os.getcwd()
     try:
         os.chdir(tmp_path)
@@ -114,10 +124,13 @@ def test_git_list_files(tmp_path: Path) -> None:
     subprocess.run(["git", "add", "."], cwd=tmp_path, capture_output=True, check=True)
     subprocess.run(
         ["git", "commit", "-m", "init"],
-        cwd=tmp_path, capture_output=True, check=True,
+        cwd=tmp_path,
+        capture_output=True,
+        check=True,
     )
 
     import os
+
     old_cwd = os.getcwd()
     try:
         os.chdir(tmp_path)
@@ -136,10 +149,13 @@ def test_git_list_files_empty_dir(tmp_path: Path) -> None:
     subprocess.run(["git", "add", "."], cwd=tmp_path, capture_output=True, check=True)
     subprocess.run(
         ["git", "commit", "-m", "init"],
-        cwd=tmp_path, capture_output=True, check=True,
+        cwd=tmp_path,
+        capture_output=True,
+        check=True,
     )
 
     import os
+
     old_cwd = os.getcwd()
     try:
         os.chdir(tmp_path)
@@ -153,6 +169,7 @@ def test_git_has_commits(tmp_path: Path) -> None:
     _init_git_repo(tmp_path)
 
     import os
+
     old_cwd = os.getcwd()
     try:
         os.chdir(tmp_path)
@@ -163,7 +180,9 @@ def test_git_has_commits(tmp_path: Path) -> None:
         subprocess.run(["git", "add", "."], cwd=tmp_path, capture_output=True, check=True)
         subprocess.run(
             ["git", "commit", "-m", "init"],
-            cwd=tmp_path, capture_output=True, check=True,
+            cwd=tmp_path,
+            capture_output=True,
+            check=True,
         )
         assert git_has_commits()
     finally:
@@ -179,13 +198,16 @@ def test_git_read_file_modified_locally(tmp_path: Path) -> None:
     subprocess.run(["git", "add", "."], cwd=tmp_path, capture_output=True, check=True)
     subprocess.run(
         ["git", "commit", "-m", "init"],
-        cwd=tmp_path, capture_output=True, check=True,
+        cwd=tmp_path,
+        capture_output=True,
+        check=True,
     )
 
     # Modify on disk (not committed)
     test_file.write_text("name: modified\n")
 
     import os
+
     old_cwd = os.getcwd()
     try:
         os.chdir(tmp_path)

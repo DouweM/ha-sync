@@ -49,7 +49,6 @@ def git_has_changes(paths: list[str] | None = None) -> bool:
         return False
 
 
-
 def git_read_file(path: str) -> str | None:
     """Read a file's content from git HEAD.
 

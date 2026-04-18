@@ -867,7 +867,6 @@ def _ask_confirmation(action: str = "proceed") -> bool:
         return False
 
 
-
 @app.command()
 def pull(
     paths: Annotated[
@@ -903,9 +902,7 @@ def pull(
 
         if in_git:
             # Three-way pull: only writes remote-changed entities
-            asyncio.run(
-                _pull_three_way(config, paths, sync_deletions, dry_run=dry_run, yes=yes)
-            )
+            asyncio.run(_pull_three_way(config, paths, sync_deletions, dry_run=dry_run, yes=yes))
         else:
             # Two-way pull: old behavior (confirmation needed)
             if dry_run:
@@ -957,8 +954,12 @@ async def _pull_three_way(
             norm_fn = _get_normalize_fn(syncer)
             fp_fn = _get_file_path_fn(syncer)
             tw_result = compute_three_way_diff(
-                base, local, remote, syncer.entity_type,
-                normalize_fn=norm_fn, file_path_fn=fp_fn,
+                base,
+                local,
+                remote,
+                syncer.entity_type,
+                normalize_fn=norm_fn,
+                file_path_fn=fp_fn,
             )
 
             # For pull, we care about:
@@ -992,9 +993,7 @@ async def _pull_three_way(
             console.print("[bold red]Conflicts (will NOT be pulled):[/bold red]\n")
             for item in all_conflicts:
                 _print_three_way_item(item, side="both")
-            console.print(
-                "\n[yellow]Resolve conflicts with sync --theirs or --ours.[/yellow]\n"
-            )
+            console.print("\n[yellow]Resolve conflicts with sync --theirs or --ours.[/yellow]\n")
 
         if dry_run:
             return
@@ -1017,10 +1016,7 @@ async def _pull_three_way(
                 for item in remote_items
                 if item.remote_status != "deleted" and item.entity_id in remote
             }
-            remote_deletions = [
-                item for item in remote_items
-                if item.remote_status == "deleted"
-            ]
+            remote_deletions = [item for item in remote_items if item.remote_status == "deleted"]
 
             if remote_to_pull:
                 await syncer.pull(
@@ -1376,7 +1372,10 @@ async def _diff_three_way(config: SyncConfig, paths: list[str] | None) -> None:
             fp_fn = _get_file_path_fn(syncer)
 
             tw_result = compute_three_way_diff(
-                base, local, remote, syncer.entity_type,
+                base,
+                local,
+                remote,
+                syncer.entity_type,
                 normalize_fn=norm_fn,
                 file_path_fn=fp_fn,
             )
@@ -1512,9 +1511,7 @@ def _print_three_way_item(item: ThreeWayDiffItem, side: str) -> None:
             f"(local: {item.local_status}, remote: {item.remote_status})"
         )
         if item.local and item.remote:
-            _print_yaml_diff(
-                item.local, item.remote, "local", "remote"
-            )
+            _print_yaml_diff(item.local, item.remote, "local", "remote")
 
 
 def _print_diff_item(item: DiffItem) -> None:
@@ -1640,9 +1637,7 @@ async def _search(
 
         # Filter by domain
         if domain:
-            all_entities = [
-                e for e in all_entities if e["entity_id"].startswith(f"{domain}.")
-            ]
+            all_entities = [e for e in all_entities if e["entity_id"].startswith(f"{domain}.")]
 
         # Filter by query (matches entity_id or name)
         query_lower = query.lower()
@@ -1675,9 +1670,7 @@ async def _search(
 
         # Filter by state if requested
         if state_filter:
-            results = [
-                (e, s) for e, s in results if s and s.get("state") == state_filter
-            ]
+            results = [(e, s) for e, s in results if s and s.get("state") == state_filter]
 
         if not results:
             console.print("[dim]No entities found[/dim]")
@@ -1696,9 +1689,7 @@ async def _search(
             entity_id = entity["entity_id"]
             name = entity.get("name") or entity.get("original_name") or ""
             state_val = state.get("state", "") if state else ""
-            friendly_name = (
-                state.get("attributes", {}).get("friendly_name", "") if state else name
-            )
+            friendly_name = state.get("attributes", {}).get("friendly_name", "") if state else name
             attr_keys = sorted(
                 k
                 for k in (state.get("attributes", {}) if state else {})
@@ -1886,9 +1877,7 @@ def sync(
             console.print("[red]Cannot use both --theirs and --ours[/red]")
             raise typer.Exit(1)
 
-        asyncio.run(
-            _sync_three_way(config, paths, sync_deletions, dry_run, yes, theirs, ours)
-        )
+        asyncio.run(_sync_three_way(config, paths, sync_deletions, dry_run, yes, theirs, ours))
 
 
 async def _sync_three_way(
@@ -1920,8 +1909,12 @@ async def _sync_three_way(
             norm_fn = _get_normalize_fn(syncer)
             fp_fn = _get_file_path_fn(syncer)
             tw_result = compute_three_way_diff(
-                base, local, remote, syncer.entity_type,
-                normalize_fn=norm_fn, file_path_fn=fp_fn,
+                base,
+                local,
+                remote,
+                syncer.entity_type,
+                normalize_fn=norm_fn,
+                file_path_fn=fp_fn,
             )
 
             # Apply file filters
@@ -1998,8 +1991,7 @@ async def _sync_three_way(
                     if item.remote_status != "deleted" and item.entity_id in remote
                 }
                 remote_deletions = [
-                    item for item in tw_result.remote_only
-                    if item.remote_status == "deleted"
+                    item for item in tw_result.remote_only if item.remote_status == "deleted"
                 ]
 
                 if remote_to_pull:
@@ -2032,8 +2024,7 @@ async def _sync_three_way(
                         if item.entity_id in remote and item.remote_status != "deleted"
                     }
                     remote_deletions = [
-                        item for item in tw_result.conflicts
-                        if item.remote_status == "deleted"
+                        item for item in tw_result.conflicts if item.remote_status == "deleted"
                     ]
                     if remote_to_pull:
                         await syncer.pull(
@@ -2056,9 +2047,7 @@ async def _sync_three_way(
         console.print("\n[green]Sync complete![/green]")
 
 
-def _three_way_to_diff_items(
-    items: list[ThreeWayDiffItem], direction: str
-) -> list[DiffItem]:
+def _three_way_to_diff_items(items: list[ThreeWayDiffItem], direction: str) -> list[DiffItem]:
     """Convert ThreeWayDiffItems to DiffItems for push/pull operations."""
     result: list[DiffItem] = []
     for item in items:
@@ -2067,14 +2056,16 @@ def _three_way_to_diff_items(
         if status is None:
             continue
 
-        result.append(DiffItem(
-            entity_id=item.entity_id,
-            status=status,
-            entity_type=item.entity_type,
-            local=item.local,
-            remote=item.remote,
-            file_path=item.file_path,
-        ))
+        result.append(
+            DiffItem(
+                entity_id=item.entity_id,
+                status=status,
+                entity_type=item.entity_type,
+                local=item.local,
+                remote=item.remote,
+                file_path=item.file_path,
+            )
+        )
     return result
 
 
@@ -2103,9 +2094,7 @@ def render(
         asyncio.run(_render(config, view_path, user, output))
 
 
-async def _render(
-    config: SyncConfig, view_path: Path, user: str | None, output: str
-) -> None:
+async def _render(config: SyncConfig, view_path: Path, user: str | None, output: str) -> None:
     """Render a dashboard view."""
     async with HAClient(config.url, config.token) as client:
         if output == "swiftbar":

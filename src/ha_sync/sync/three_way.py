@@ -99,57 +99,61 @@ def compute_three_way_diff(
 
         if local_status is not None and remote_status is None:
             # Only local changed
-            result.local_only.append(ThreeWayDiffItem(
-                entity_id=entity_id,
-                entity_type=entity_type,
-                change_location="local_only",
-                local_status=local_status,
-                remote_status=None,
-                base=base_data,
-                local=local_data,
-                remote=remote_data,
-                file_path=fp,
-                has_conflict=False,
-            ))
+            result.local_only.append(
+                ThreeWayDiffItem(
+                    entity_id=entity_id,
+                    entity_type=entity_type,
+                    change_location="local_only",
+                    local_status=local_status,
+                    remote_status=None,
+                    base=base_data,
+                    local=local_data,
+                    remote=remote_data,
+                    file_path=fp,
+                    has_conflict=False,
+                )
+            )
         elif local_status is None and remote_status is not None:
             # Only remote changed
-            result.remote_only.append(ThreeWayDiffItem(
-                entity_id=entity_id,
-                entity_type=entity_type,
-                change_location="remote_only",
-                local_status=None,
-                remote_status=remote_status,
-                base=base_data,
-                local=local_data,
-                remote=remote_data,
-                file_path=fp,
-                has_conflict=False,
-            ))
+            result.remote_only.append(
+                ThreeWayDiffItem(
+                    entity_id=entity_id,
+                    entity_type=entity_type,
+                    change_location="remote_only",
+                    local_status=None,
+                    remote_status=remote_status,
+                    base=base_data,
+                    local=local_data,
+                    remote=remote_data,
+                    file_path=fp,
+                    has_conflict=False,
+                )
+            )
         else:
             # Both sides changed - check if it's the same change
             if local_norm == remote_norm:
                 # Same change on both sides: not a conflict, no action needed
                 continue
 
-            result.conflicts.append(ThreeWayDiffItem(
-                entity_id=entity_id,
-                entity_type=entity_type,
-                change_location="both",
-                local_status=local_status,
-                remote_status=remote_status,
-                base=base_data,
-                local=local_data,
-                remote=remote_data,
-                file_path=fp,
-                has_conflict=True,
-            ))
+            result.conflicts.append(
+                ThreeWayDiffItem(
+                    entity_id=entity_id,
+                    entity_type=entity_type,
+                    change_location="both",
+                    local_status=local_status,
+                    remote_status=remote_status,
+                    base=base_data,
+                    local=local_data,
+                    remote=remote_data,
+                    file_path=fp,
+                    has_conflict=True,
+                )
+            )
 
     return result
 
 
-def _compute_status(
-    base: dict[str, Any] | None, current: dict[str, Any] | None
-) -> str | None:
+def _compute_status(base: dict[str, Any] | None, current: dict[str, Any] | None) -> str | None:
     """Compute the change status of one side relative to base.
 
     Returns:

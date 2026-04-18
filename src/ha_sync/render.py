@@ -155,9 +155,7 @@ class ViewResolver:
                 )
 
         # Fill in missing icons from entity registry (platform-provided icons)
-        missing_icon_entities = [
-            eid for eid, cached in self.state_cache.items() if not cached.icon
-        ]
+        missing_icon_entities = [eid for eid, cached in self.state_cache.items() if not cached.icon]
         if missing_icon_entities:
             await self._fetch_registry_icons(missing_icon_entities)
 
@@ -277,7 +275,7 @@ class ViewResolver:
             '"attributes": {'
             "{% for k, v in e.attributes.items() if v is string or v is number %}"
             "{{ k | tojson }}: {{ v | string | tojson }}"
-            '{% if not loop.last %}, {% endif %}'
+            "{% if not loop.last %}, {% endif %}"
             "{% endfor %}"
             "}}"
             "{% if not loop.last %},{% endif %}"
@@ -325,11 +323,7 @@ class ViewResolver:
             device_class = (cached.device_class if cached else "") or None
 
         # Weather entities: use condition as icon for condition-based SF Symbol lookup
-        if (
-            not mdi_name
-            and entity_id
-            and entity_id.startswith("weather.")
-        ):
+        if not mdi_name and entity_id and entity_id.startswith("weather."):
             state = self.get_state(entity_id)
             if state not in ("unavailable", "unknown"):
                 mdi_name = f"weather-{state.replace('_', '-')}"
@@ -569,12 +563,14 @@ class ViewResolver:
             icon = self._make_icon(icon_str, entity_id)
             formatted = self._format_state(entity_id, state)
 
-            tiles.append(RenderedTile(
-                entity_id=entity_id,
-                name=name,
-                state=formatted,
-                icon=icon,
-            ))
+            tiles.append(
+                RenderedTile(
+                    entity_id=entity_id,
+                    name=name,
+                    state=formatted,
+                    icon=icon,
+                )
+            )
 
         return RenderedAutoEntities(tiles=tiles)
 
@@ -650,13 +646,15 @@ class ViewResolver:
             icon_str = cached.icon if cached else ""
             icon = self._make_icon(icon_str, entity_id)
 
-            entries.append(RenderedLogbookEntry(
-                entity_id=entity_id,
-                name=name,
-                state=formatted,
-                time_ago=time_str,
-                icon=icon,
-            ))
+            entries.append(
+                RenderedLogbookEntry(
+                    entity_id=entity_id,
+                    name=name,
+                    state=formatted,
+                    time_ago=time_str,
+                    icon=icon,
+                )
+            )
 
         return RenderedLogbook(entries=entries)
 

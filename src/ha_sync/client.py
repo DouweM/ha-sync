@@ -254,9 +254,7 @@ class HAClient:
         """Get all automation config IDs via entity registry."""
         entities = await self.get_entity_registry_cached()
         return [
-            e["unique_id"]
-            for e in entities
-            if e.get("entity_id", "").startswith("automation.")
+            e["unique_id"] for e in entities if e.get("entity_id", "").startswith("automation.")
         ]
 
     @logfire.instrument("Get automation config: {automation_id}")
