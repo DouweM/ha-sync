@@ -331,13 +331,14 @@ class HAClient:
 
     @logfire.instrument("Get scenes")
     async def get_scenes(self) -> list[str]:
-        """Get all scene IDs via entity registry."""
+        """Get all scene config IDs via entity registry.
+
+        Uses unique_id (the storage config id) rather than the object_id, since
+        HA's /api/config/scene/config/<id> endpoint is keyed by that id. For UI
+        scenes the object_id (slugified name) differs from it.
+        """
         entities = await self.get_entity_registry_cached()
-        return [
-            e["entity_id"].removeprefix("scene.")
-            for e in entities
-            if e.get("entity_id", "").startswith("scene.")
-        ]
+        return [e["unique_id"] for e in entities if e.get("entity_id", "").startswith("scene.")]
 
     @logfire.instrument("Get scene config: {scene_id}")
     async def get_scene_config(self, scene_id: str) -> dict[str, Any]:
