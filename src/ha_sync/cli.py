@@ -952,7 +952,7 @@ async def _pull_three_way(
             remote = await syncer.get_remote_entities()
 
             norm_fn = _get_normalize_fn(syncer)
-            fp_fn = _get_file_path_fn(syncer)
+            fp_fn = _get_file_path_fn(syncer, local, remote)
             tw_result = compute_three_way_diff(
                 base,
                 local,
@@ -1366,7 +1366,7 @@ async def _diff_three_way(config: SyncConfig, paths: list[str] | None) -> None:
 
             # Get normalize and file_path functions from syncer
             norm_fn = _get_normalize_fn(syncer)
-            fp_fn = _get_file_path_fn(syncer)
+            fp_fn = _get_file_path_fn(syncer, local, remote)
 
             tw_result = compute_three_way_diff(
                 base,
@@ -1477,12 +1477,32 @@ def _get_normalize_fn(
     return None
 
 
-def _get_file_path_fn(syncer: BaseSyncer) -> Callable[[str], str | None] | None:
-    """Get a file_path function for a syncer."""
+def _get_file_path_fn(
+    syncer: BaseSyncer,
+    local: dict[str, dict[str, Any]] | None = None,
+    remote: dict[str, dict[str, Any]] | None = None,
+) -> Callable[[str], str | None] | None:
+    """Get a file_path function for a syncer.
+
+    Mirrors how the syncer actually names files on write: prefer an existing
+    local file's name, otherwise derive it from the entity's config via
+    ``get_filename`` (so e.g. scenes show as ``good_morning.yaml``, not their
+    opaque numeric id). Falls back to ``<id>.yaml`` when no config is available.
+    """
+    from ha_sync.sync.base import SimpleEntitySyncer
+    from ha_sync.utils import filename_from_id
     from ha_sync.utils import relative_path as rel_path
 
     def fp(entity_id: str) -> str | None:
-        return rel_path(syncer.local_path / f"{entity_id}.yaml")
+        local_cfg = (local or {}).get(entity_id)
+        if local_cfg and local_cfg.get("_filename"):
+            filename = local_cfg["_filename"]
+        elif isinstance(syncer, SimpleEntitySyncer):
+            config = local_cfg or (remote or {}).get(entity_id) or {}
+            filename = syncer.get_filename(entity_id, config)
+        else:
+            filename = filename_from_id(entity_id)
+        return rel_path(syncer.local_path / filename)
 
     return fp
 
@@ -1936,7 +1956,7 @@ async def _sync_three_way(
             remote = await syncer.get_remote_entities()
 
             norm_fn = _get_normalize_fn(syncer)
-            fp_fn = _get_file_path_fn(syncer)
+            fp_fn = _get_file_path_fn(syncer, local, remote)
             tw_result = compute_three_way_diff(
                 base,
                 local,

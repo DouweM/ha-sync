@@ -8,6 +8,7 @@ import logfire
 from ha_sync.client import HAClient
 from ha_sync.config import SyncConfig
 from ha_sync.models import Scene
+from ha_sync.utils import filename_from_name
 
 from .base import SimpleEntitySyncer
 
@@ -24,6 +25,17 @@ class SceneSyncer(SimpleEntitySyncer):
     @property
     def local_path(self) -> Path:
         return self.config.scenes_path
+
+    def get_filename(self, entity_id: str, config: dict[str, Any]) -> str:
+        """Name files by the scene's human-readable name, not its storage id.
+
+        Scene ids are opaque numeric strings (e.g. "1779999288609"), so naming
+        files after them makes scenes hard to find locally. Use the scene's
+        ``name`` (slugified), matching how automations are named from their
+        alias; fall back to the id when no name is present. The id stays in the
+        file content, so discovery/rename detection is unaffected.
+        """
+        return filename_from_name(config.get("name", ""), entity_id)
 
     @logfire.instrument("Fetch remote scenes")
     async def get_remote_entities(self) -> dict[str, dict[str, Any]]:

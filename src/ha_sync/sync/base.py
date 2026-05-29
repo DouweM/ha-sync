@@ -265,7 +265,13 @@ class SimpleEntitySyncer(BaseSyncer):
             for entity_id, config in remote.items():
                 config = self.ensure_id_in_config(entity_id, config)
                 ordered = self.normalize(config)
-                file_path = self.local_path / self.get_filename(entity_id, config)
+                # Keep the existing local filename when updating; only derive a
+                # new name from the config for entities we haven't pulled before.
+                if entity_id in local and "_filename" in local[entity_id]:
+                    filename = local[entity_id]["_filename"]
+                else:
+                    filename = self.get_filename(entity_id, config)
+                file_path = self.local_path / filename
                 rel_path = relative_path(file_path)
 
                 if entity_id in local:
