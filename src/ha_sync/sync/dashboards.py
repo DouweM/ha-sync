@@ -69,8 +69,12 @@ class DashboardSyncer(BaseSyncer):
         dashboards = await self.client.get_dashboards()
         result: dict[str, dict[str, Any]] = {}
 
-        # Always include the default dashboard
-        default_config = await self.client.get_dashboard_config(None)
+        # Include the default dashboard if it has saved config
+        # (instances using the auto-generated Overview return config_not_found)
+        try:
+            default_config = await self.client.get_dashboard_config(None)
+        except Exception:
+            default_config = None
         if default_config:
             result["lovelace"] = {
                 "meta": {
