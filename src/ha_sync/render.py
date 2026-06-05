@@ -6,6 +6,7 @@ Split into two layers:
 """
 
 import json
+from datetime import datetime
 from pathlib import Path
 from typing import Any, ClassVar
 
@@ -49,6 +50,7 @@ from ha_sync.render_models import (
     VisibilityConditionOr,
     VisibilityConditionScreen,
     VisibilityConditionState,
+    VisibilityConditionTime,
     VisibilityConditionUser,
     WeatherCardConfig,
     format_state,
@@ -240,6 +242,37 @@ class ViewResolver:
             elif isinstance(condition, VisibilityConditionScreen):
                 if "max-width: 767px" in condition.media_query:
                     return False  # Mobile-only
+
+            elif isinstance(condition, VisibilityConditionTime):
+                now = datetime.now().time()
+                try:
+                    after = (
+                        datetime.strptime(condition.after, "%H:%M:%S").time()
+                        if condition.after
+                        else None
+                    )
+                    before = (
+                        datetime.strptime(condition.before, "%H:%M:%S").time()
+                        if condition.before
+                        else None
+                    )
+                except ValueError:
+                    return False
+                if after is not None and before is not None:
+                    if after <= before:
+                        # Normal range: after <= now < before
+                        if not (after <= now < before):
+                            return False
+                    else:
+                        # Overnight range (e.g. 22:00-06:00): now >= after OR now < before
+                        if not (now >= after or now < before):
+                            return False
+                elif after is not None:
+                    if now < after:
+                        return False
+                elif before is not None:
+                    if now >= before:
+                        return False
 
             elif isinstance(condition, VisibilityConditionUser):
                 if self.current_user is None:

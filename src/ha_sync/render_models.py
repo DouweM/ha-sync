@@ -269,6 +269,18 @@ class VisibilityConditionUser(BaseModel):
     users: list[str] = Field(default_factory=list)
 
 
+class VisibilityConditionTime(BaseModel):
+    """Time-based visibility condition."""
+
+    model_config = ConfigDict(extra="allow")
+
+    condition: Literal["time"]
+    after: str | None = None
+    """Time in HH:MM:SS format."""
+    before: str | None = None
+    """Time in HH:MM:SS format."""
+
+
 class VisibilityConditionOr(BaseModel):
     """OR composite visibility condition."""
 
@@ -301,6 +313,7 @@ VisibilityCondition = Annotated[
     | VisibilityConditionNumericState
     | VisibilityConditionScreen
     | VisibilityConditionUser
+    | VisibilityConditionTime
     | VisibilityConditionOr
     | VisibilityConditionAnd
     | VisibilityConditionNot,
