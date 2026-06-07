@@ -610,6 +610,50 @@ class HAClient:
         self._check_response(response)
         self.invalidate_config_entries_cache()
 
+    async def _drive_flow_to_completion(
+        self,
+        base_url: str,
+        result: dict[str, Any],
+        form_data: dict[str, Any],
+        max_steps: int = 10,
+    ) -> dict[str, Any]:
+        """Submit successive form steps until the flow finishes.
+
+        Some helpers (e.g. generic_thermostat, filter) have multi-step options/config
+        flows: the first submit returns another `form` rather than `create_entry`.
+        Submitting only the first step abandons the flow and leaves the entry's
+        options unset. This drives the flow forward, sending each step the subset
+        of form_data matching that step's schema (empty when none match, which
+        completes optional steps like presets).
+
+        Args:
+            base_url: Flow endpoint base, e.g. "/api/config/config_entries/options/flow".
+            result: The flow result after the initial submit.
+            form_data: All available config fields (filtered per step).
+        """
+        flow_id = result.get("flow_id")
+        for _ in range(max_steps):
+            result_type = result.get("type")
+            if result_type == "create_entry":
+                return result
+            if result.get("errors"):
+                raise ValueError(f"Flow errors: {result['errors']}")
+            if result_type != "form":
+                raise ValueError(f"Unexpected flow result: {result}")
+
+            step_fields = {
+                field.get("name")
+                for field in (result.get("data_schema") or [])
+                if field.get("name")
+            }
+            step_data = {k: v for k, v in form_data.items() if k in step_fields}
+
+            response = await self.http.post(f"{base_url}/{flow_id}", json=step_data)
+            self._check_response(response)
+            result = response.json()
+
+        raise ValueError(f"Flow did not complete after {max_steps} steps")
+
     @logfire.instrument("Create config entry: {domain}")
     async def create_config_entry(
         self,
@@ -661,17 +705,15 @@ class HAClient:
             self._check_response(response)
             result = response.json()
 
-            if result.get("type") == "create_entry":
-                entry_id = result["result"]["entry_id"]
-                logfire.info("Created config entry {entry_id}", entry_id=entry_id)
-                self.invalidate_config_entries_cache()
-                return entry_id
-            elif result.get("errors"):
-                logfire.warning("Config flow errors: {errors}", errors=result["errors"])
-                raise ValueError(f"Config flow errors: {result['errors']}")
-            else:
-                logfire.warning("Unexpected flow result: {result}", result=result)
-                raise ValueError(f"Unexpected flow result: {result}")
+            # Drive multi-step flows (e.g. generic_thermostat presets) to completion
+            result = await self._drive_flow_to_completion(
+                "/api/config/config_entries/flow", result, form_data
+            )
+
+            entry_id = result["result"]["entry_id"]
+            logfire.info("Created config entry {entry_id}", entry_id=entry_id)
+            self.invalidate_config_entries_cache()
+            return entry_id
 
         except Exception:
             # Clean up the flow on error
@@ -705,7 +747,7 @@ class HAClient:
                 if k not in ("entry_id", "step_id", "name") and v is not None
             }
 
-            # Submit the form data
+            # Submit the form data, driving multi-step flows to completion
             response = await self.http.post(
                 f"/api/config/config_entries/options/flow/{flow_id}",
                 json=form_data,
@@ -713,9 +755,9 @@ class HAClient:
             self._check_response(response)
             result = response.json()
 
-            if result.get("errors"):
-                logfire.warning("Options flow errors: {errors}", errors=result["errors"])
-                raise ValueError(f"Options flow errors: {result['errors']}")
+            await self._drive_flow_to_completion(
+                "/api/config/config_entries/options/flow", result, form_data
+            )
 
             self.invalidate_config_entries_cache()
 
