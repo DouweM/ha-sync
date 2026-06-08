@@ -267,12 +267,8 @@ class ViewResolver:
                         # Overnight range (e.g. 22:00-06:00): now >= after OR now < before
                         if not (now >= after or now < before):
                             return False
-                elif after is not None:
-                    if now < after:
-                        return False
-                elif before is not None:
-                    if now >= before:
-                        return False
+                elif (after is not None and now < after) or (before is not None and now >= before):
+                    return False
 
             elif isinstance(condition, VisibilityConditionUser):
                 if self.current_user is None:
