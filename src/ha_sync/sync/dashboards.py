@@ -1,5 +1,6 @@
 """Dashboard sync implementation with view splitting."""
 
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -20,11 +21,35 @@ from ha_sync.utils import (
 )
 
 from .base import BaseSyncer, DiffItem, SyncResult
+from .three_way import ThreeWayDiffItem, _compute_status
 
 console = Console()
 
 META_FILE = "_meta.yaml"
 DASHBOARD_PREFIX = "dashboard-"
+
+# Sentinel key used to represent the dashboard-level metadata unit (title, icon,
+# hoisted config keys like swipe_nav/strategy) when splitting a dashboard into
+# per-view units for three-way diffing.
+META_UNIT = "_meta"
+
+
+@dataclass
+class DashboardViewDiff:
+    """Result of a per-view three-way diff across all dashboards.
+
+    Each item's ``entity_id`` is the dashboard's directory name (so existing
+    pull/resolve plumbing that keys on dir name keeps working), while
+    ``file_path`` points at the specific view file (or ``_meta.yaml``) that
+    changed. ``merged_remote`` holds, per dashboard, the reassembled full
+    ``{"meta": ..., "config": ...}`` to write on pull -- combining remote-only
+    and unchanged views with local-only views so disjoint edits auto-merge.
+    """
+
+    local_only: list[ThreeWayDiffItem] = field(default_factory=list)
+    remote_only: list[ThreeWayDiffItem] = field(default_factory=list)
+    conflicts: list[ThreeWayDiffItem] = field(default_factory=list)
+    merged_remote: dict[str, dict[str, Any]] = field(default_factory=dict)
 
 
 def dir_name_from_url_path(url_path: str | None) -> str:
@@ -738,6 +763,283 @@ class DashboardSyncer(BaseSyncer):
                 result[key] = value
 
         return result
+
+    def _view_key(self, view: dict[str, Any], index: int) -> str:
+        """Stable identity for a view across base/local/remote sides.
+
+        Prefer the view's ``path`` (the durable HA identifier). Fall back to a
+        slug of its title, then to a positional key so views lacking both don't
+        collide or crash.
+        """
+        path = view.get("path")
+        if path:
+            return f"path:{path}"
+        title = view.get("title")
+        if title:
+            return f"title:{slugify(str(title))}"
+        return f"index:{index}"
+
+    def _meta_unit(self, meta: dict[str, Any], config: dict[str, Any]) -> dict[str, Any]:
+        """Build a normalized comparable dict of dashboard-level metadata.
+
+        Includes user-facing meta (title, icon, show_in_sidebar, require_admin)
+        and hoisted config keys (swipe_nav, strategy, etc.) but excludes
+        ``views`` (compared per-view) and ``url_path`` (rename handling lives
+        elsewhere and would otherwise look like a meta change on every pull).
+        """
+        unit: dict[str, Any] = {}
+        for key in ("title", "icon", "show_in_sidebar", "require_admin"):
+            if meta.get(key) is not None:
+                unit[key] = meta[key]
+        for key, value in self._normalize_config(config).items():
+            if key != "views":
+                unit[key] = value
+        return unit
+
+    def _split_into_units(self, entity: dict[str, Any] | None) -> dict[str, dict[str, Any]]:
+        """Split a dashboard ``{"meta", "config"}`` into per-view + meta units.
+
+        Returns a dict keyed by ``_view_key`` (and ``META_UNIT``) mapping to
+        normalized, position-stripped content suitable for three-way comparison.
+        """
+        if entity is None:
+            return {}
+        meta = entity.get("meta") or {}
+        config = entity.get("config") or {}
+        units: dict[str, dict[str, Any]] = {META_UNIT: self._meta_unit(meta, config)}
+        for index, view in enumerate(config.get("views", [])):
+            normalized = View.normalize(view)
+            normalized.pop("position", None)
+            units[self._view_key(view, index)] = normalized
+        return units
+
+    def _view_file_path(self, dir_name: str, view: dict[str, Any]) -> str:
+        """Relative path of the view file for diff reporting (display only)."""
+        path = view.get("path")
+        title = view.get("title")
+        if path:
+            stem = str(path)
+        elif title:
+            stem = slugify(str(title))
+        else:
+            stem = "view"
+        return relative_path(self.local_path / dir_name / f"{stem}.yaml")
+
+    def compute_view_three_way(
+        self,
+        base: dict[str, dict[str, Any]],
+        local: dict[str, dict[str, Any]],
+        remote: dict[str, dict[str, Any]],
+        conflict_resolution: str = "none",
+    ) -> DashboardViewDiff:
+        """Per-view three-way diff across all dashboards.
+
+        Splits each dashboard into per-view units (plus a ``_meta`` unit) keyed
+        by stable view identity, runs the standard three-way comparison per
+        unit, and reassembles a merged config per dashboard so disjoint
+        local/remote edits auto-merge. Same-unit divergence becomes a conflict
+        reported against that unit's file (the view file or ``_meta.yaml``).
+
+        Args:
+            conflict_resolution: How to fold conflicted units into the merged
+                config. ``"none"`` keeps the local side (conflicts are reported,
+                not applied); ``"theirs"`` takes the remote side per conflicted
+                unit; ``"ours"`` keeps the local side. With ``"theirs"``/``"ours"``
+                the affected dashboard is added to ``merged_remote`` so callers
+                can pull the per-view resolution without clobbering disjoint
+                local edits in the same dashboard.
+        """
+        result = DashboardViewDiff()
+        all_dirs = set(base) | set(local) | set(remote)
+
+        for dir_name in sorted(all_dirs):
+            base_entity = base.get(dir_name)
+            local_entity = local.get(dir_name)
+            remote_entity = remote.get(dir_name)
+
+            base_units = self._split_into_units(base_entity)
+            local_units = self._split_into_units(local_entity)
+            remote_units = self._split_into_units(remote_entity)
+
+            # Index raw (un-normalized) views by key on each side so we can
+            # reassemble the merged config from whichever side won.
+            local_views = self._index_raw_views(local_entity)
+            remote_views = self._index_raw_views(remote_entity)
+            base_views = self._index_raw_views(base_entity)
+
+            dir_has_remote_change = False
+            dir_has_conflict = False
+            conflict_keys: set[str] = set()
+
+            unit_keys = set(base_units) | set(local_units) | set(remote_units)
+
+            for unit_key in sorted(unit_keys):
+                b = base_units.get(unit_key)
+                lo = local_units.get(unit_key)
+                re_ = remote_units.get(unit_key)
+
+                local_status = _compute_status(b, lo)
+                remote_status = _compute_status(b, re_)
+
+                if local_status is None and remote_status is None:
+                    continue  # Unit unchanged on both sides.
+
+                if unit_key == META_UNIT:
+                    fp = relative_path(self.local_path / dir_name / META_FILE)
+                else:
+                    raw_for_path = (
+                        remote_views.get(unit_key)
+                        or local_views.get(unit_key)
+                        or base_views.get(unit_key)
+                        or {}
+                    )
+                    fp = self._view_file_path(dir_name, raw_for_path)
+
+                if local_status is not None and remote_status is None:
+                    result.local_only.append(
+                        ThreeWayDiffItem(
+                            entity_id=dir_name,
+                            entity_type=self.entity_type,
+                            change_location="local_only",
+                            local_status=local_status,
+                            remote_status=None,
+                            base=b,
+                            local=lo,
+                            remote=re_,
+                            file_path=fp,
+                            has_conflict=False,
+                        )
+                    )
+                elif local_status is None and remote_status is not None:
+                    dir_has_remote_change = True
+                    result.remote_only.append(
+                        ThreeWayDiffItem(
+                            entity_id=dir_name,
+                            entity_type=self.entity_type,
+                            change_location="remote_only",
+                            local_status=None,
+                            remote_status=remote_status,
+                            base=b,
+                            local=lo,
+                            remote=re_,
+                            file_path=fp,
+                            has_conflict=False,
+                        )
+                    )
+                else:
+                    # Both sides changed.
+                    if lo == re_:
+                        continue  # Same change on both sides: no action.
+                    conflict_keys.add(unit_key)
+                    dir_has_conflict = True
+                    result.conflicts.append(
+                        ThreeWayDiffItem(
+                            entity_id=dir_name,
+                            entity_type=self.entity_type,
+                            change_location="both",
+                            local_status=local_status,
+                            remote_status=remote_status,
+                            base=b,
+                            local=lo,
+                            remote=re_,
+                            file_path=fp,
+                            has_conflict=True,
+                        )
+                    )
+
+            # Reassemble a merged config for the pull side. For every view key,
+            # pick the side that wins:
+            #   - conflict + "theirs" -> remote view (or drop if remote deleted)
+            #   - conflict + "ours"/"none" -> local view (or drop if local deleted)
+            #   - remote changed it (no conflict) -> remote view
+            #   - remote deleted it (no conflict) -> drop the view
+            #   - otherwise -> local view (preserving local-only edits)
+            merged_views: list[dict[str, Any]] = []
+            for unit_key in self._ordered_view_keys(remote_entity, local_entity, base_entity):
+                b = base_units.get(unit_key)
+                remote_status = _compute_status(b, remote_units.get(unit_key))
+                local_status = _compute_status(b, local_units.get(unit_key))
+                in_conflict = unit_key in conflict_keys
+
+                if in_conflict:
+                    if conflict_resolution == "theirs":
+                        if remote_status == "deleted":
+                            continue
+                        raw = remote_views.get(unit_key)
+                    else:  # "ours" or "none": keep local
+                        if local_status == "deleted":
+                            continue
+                        raw = local_views.get(unit_key)
+                elif remote_status == "deleted":
+                    continue
+                elif remote_status is not None:
+                    raw = remote_views.get(unit_key)
+                else:
+                    raw = local_views.get(unit_key) or remote_views.get(unit_key)
+
+                if raw is not None:
+                    merged_views.append(raw)
+
+            # Merged meta: pick the winning side for the dashboard-level metadata.
+            meta_remote_status = _compute_status(
+                base_units.get(META_UNIT), remote_units.get(META_UNIT)
+            )
+            meta_in_conflict = META_UNIT in conflict_keys
+            if meta_in_conflict:
+                meta_from_remote = conflict_resolution == "theirs"
+            else:
+                meta_from_remote = meta_remote_status is not None and remote_entity is not None
+            if meta_from_remote and remote_entity is not None:
+                source_entity: dict[str, Any] = remote_entity
+            else:
+                source_entity = local_entity or remote_entity or {}
+            merged_meta = source_entity.get("meta", {})
+
+            merged_config: dict[str, Any] = {}
+            for key, value in source_entity.get("config", {}).items():
+                if key != "views":
+                    merged_config[key] = value
+            if "strategy" not in merged_config:
+                merged_config["views"] = merged_views
+
+            # Add to merged_remote when there's a remote change to pull, or when
+            # we're resolving conflicts in a way that requires writing locally.
+            needs_pull = dir_has_remote_change or (
+                dir_has_conflict and conflict_resolution in ("theirs", "ours")
+            )
+            if needs_pull:
+                result.merged_remote[dir_name] = {
+                    "meta": merged_meta,
+                    "config": merged_config,
+                }
+
+        return result
+
+    def _index_raw_views(self, entity: dict[str, Any] | None) -> dict[str, dict[str, Any]]:
+        """Map view key -> raw (un-normalized) view dict for an entity side."""
+        if entity is None:
+            return {}
+        config = entity.get("config") or {}
+        result: dict[str, dict[str, Any]] = {}
+        for index, view in enumerate(config.get("views", [])):
+            result[self._view_key(view, index)] = view
+        return result
+
+    def _ordered_view_keys(
+        self,
+        remote_entity: dict[str, Any] | None,
+        local_entity: dict[str, Any] | None,
+        base_entity: dict[str, Any] | None,
+    ) -> list[str]:
+        """Stable ordering of view keys: remote order first, then local-only adds."""
+        ordered: list[str] = []
+        seen: set[str] = set()
+        for entity in (remote_entity, local_entity, base_entity):
+            for key in self._index_raw_views(entity):
+                if key not in seen:
+                    seen.add(key)
+                    ordered.append(key)
+        return ordered
 
     @logfire.instrument("Diff dashboards")
     async def diff(self, remote: dict[str, dict[str, Any]] | None = None) -> list[DiffItem]:

@@ -352,6 +352,265 @@ class TestDashboardSyncerPull:
         assert not (sync_config.dashboards_path / "lovelace").exists()
 
 
+def _fp_tail(file_path: str | None) -> str | None:
+    """Return the ``dashboards/...`` tail of a (possibly absolute) file path.
+
+    ``relative_path`` produces absolute paths in tests because the temp sync
+    dir isn't under cwd; this normalizes for stable assertions.
+    """
+    if file_path is None:
+        return None
+    idx = file_path.find("dashboards/")
+    return file_path[idx:] if idx != -1 else file_path
+
+
+def _entity(views: list[dict] | None = None, **meta: object) -> dict:
+    """Build a dashboard entity dict ({"meta", "config"}) for view-diff tests."""
+    base_meta = {
+        "title": "Test",
+        "icon": "mdi:home",
+        "show_in_sidebar": True,
+        "require_admin": False,
+        "url_path": "dashboard-test",
+    }
+    base_meta.update(meta)
+    config: dict = {"views": views if views is not None else []}
+    return {"meta": base_meta, "config": config}
+
+
+def _view(path: str, title: str | None = None, cards: list | None = None) -> dict:
+    return {"path": path, "title": title or path.title(), "cards": cards or []}
+
+
+class TestComputeViewThreeWay:
+    """Tests for per-view three-way dashboard diffing (auto-merge)."""
+
+    def _syncer(self, mock_ha_client: HAClient, sync_config: MockSyncConfig) -> DashboardSyncer:
+        return DashboardSyncer(mock_ha_client, sync_config)
+
+    def test_no_changes(self, mock_ha_client: HAClient, sync_config: MockSyncConfig) -> None:
+        """Identical base/local/remote -> nothing to do, round trip is a no-op."""
+        syncer = self._syncer(mock_ha_client, sync_config)
+        entity = _entity([_view("a"), _view("b")])
+        diff = syncer.compute_view_three_way({"test": entity}, {"test": entity}, {"test": entity})
+        assert not diff.local_only
+        assert not diff.remote_only
+        assert not diff.conflicts
+        assert not diff.merged_remote
+
+    def test_disjoint_edits_auto_merge(
+        self, mock_ha_client: HAClient, sync_config: MockSyncConfig
+    ) -> None:
+        """Local edits view A, remote edits view B -> no conflict, both preserved."""
+        syncer = self._syncer(mock_ha_client, sync_config)
+        base = {"test": _entity([_view("a"), _view("b")])}
+        local = {"test": _entity([_view("a", cards=[{"type": "local"}]), _view("b")])}
+        remote = {"test": _entity([_view("a"), _view("b", cards=[{"type": "remote"}])])}
+
+        diff = syncer.compute_view_three_way(base, local, remote)
+
+        # No conflict; view A is local-only, view B is remote-only.
+        assert not diff.conflicts
+        assert {_fp_tail(i.file_path) for i in diff.local_only} == {"dashboards/test/a.yaml"}
+        assert {_fp_tail(i.file_path) for i in diff.remote_only} == {"dashboards/test/b.yaml"}
+
+        # Merged config keeps local A edit AND pulls remote B edit.
+        merged_views = diff.merged_remote["test"]["config"]["views"]
+        by_path = {v["path"]: v for v in merged_views}
+        assert by_path["a"]["cards"] == [{"type": "local"}]
+        assert by_path["b"]["cards"] == [{"type": "remote"}]
+
+    def test_same_view_diverges_is_conflict(
+        self, mock_ha_client: HAClient, sync_config: MockSyncConfig
+    ) -> None:
+        """Same view changed differently on both sides -> conflict on that file."""
+        syncer = self._syncer(mock_ha_client, sync_config)
+        base = {"test": _entity([_view("a")])}
+        local = {"test": _entity([_view("a", cards=[{"type": "local"}])])}
+        remote = {"test": _entity([_view("a", cards=[{"type": "remote"}])])}
+
+        diff = syncer.compute_view_three_way(base, local, remote)
+
+        assert len(diff.conflicts) == 1
+        conflict = diff.conflicts[0]
+        assert conflict.entity_id == "test"
+        assert _fp_tail(conflict.file_path) == "dashboards/test/a.yaml"
+        assert conflict.has_conflict
+        # Not auto-pulled while unresolved.
+        assert not diff.merged_remote
+
+    def test_same_view_changed_same_way_no_conflict(
+        self, mock_ha_client: HAClient, sync_config: MockSyncConfig
+    ) -> None:
+        """Both sides made the identical view change -> no conflict, no action."""
+        syncer = self._syncer(mock_ha_client, sync_config)
+        base = {"test": _entity([_view("a")])}
+        changed = {"test": _entity([_view("a", cards=[{"type": "same"}])])}
+
+        diff = syncer.compute_view_three_way(base, changed, changed)
+
+        assert not diff.conflicts
+        assert not diff.local_only
+        assert not diff.remote_only
+
+    def test_meta_only_change_remote_merges(
+        self, mock_ha_client: HAClient, sync_config: MockSyncConfig
+    ) -> None:
+        """Remote-only meta change (icon) merges via _meta.yaml, views untouched."""
+        syncer = self._syncer(mock_ha_client, sync_config)
+        base = {"test": _entity([_view("a")], icon="mdi:home")}
+        local = {"test": _entity([_view("a")], icon="mdi:home")}
+        remote = {"test": _entity([_view("a")], icon="mdi:star")}
+
+        diff = syncer.compute_view_three_way(base, local, remote)
+
+        assert not diff.conflicts
+        assert not diff.local_only
+        assert [_fp_tail(i.file_path) for i in diff.remote_only] == ["dashboards/test/_meta.yaml"]
+        assert diff.merged_remote["test"]["meta"]["icon"] == "mdi:star"
+
+    def test_meta_diverges_is_conflict(
+        self, mock_ha_client: HAClient, sync_config: MockSyncConfig
+    ) -> None:
+        """Meta changed differently on both sides -> conflict on _meta.yaml."""
+        syncer = self._syncer(mock_ha_client, sync_config)
+        base = {"test": _entity([_view("a")], title="Base")}
+        local = {"test": _entity([_view("a")], title="Local")}
+        remote = {"test": _entity([_view("a")], title="Remote")}
+
+        diff = syncer.compute_view_three_way(base, local, remote)
+
+        assert len(diff.conflicts) == 1
+        assert _fp_tail(diff.conflicts[0].file_path) == "dashboards/test/_meta.yaml"
+
+    def test_remote_added_view_merges(
+        self, mock_ha_client: HAClient, sync_config: MockSyncConfig
+    ) -> None:
+        """A view added only remotely is pulled into the merged config."""
+        syncer = self._syncer(mock_ha_client, sync_config)
+        base = {"test": _entity([_view("a")])}
+        local = {"test": _entity([_view("a")])}
+        remote = {"test": _entity([_view("a"), _view("b")])}
+
+        diff = syncer.compute_view_three_way(base, local, remote)
+
+        assert not diff.conflicts
+        assert [_fp_tail(i.file_path) for i in diff.remote_only] == ["dashboards/test/b.yaml"]
+        merged_paths = [v["path"] for v in diff.merged_remote["test"]["config"]["views"]]
+        assert merged_paths == ["a", "b"]
+
+    def test_remote_deleted_view_drops_in_merge(
+        self, mock_ha_client: HAClient, sync_config: MockSyncConfig
+    ) -> None:
+        """A view deleted only remotely is dropped from the merged config."""
+        syncer = self._syncer(mock_ha_client, sync_config)
+        base = {"test": _entity([_view("a"), _view("b")])}
+        local = {"test": _entity([_view("a"), _view("b")])}
+        remote = {"test": _entity([_view("a")])}
+
+        diff = syncer.compute_view_three_way(base, local, remote)
+
+        assert not diff.conflicts
+        remote_item = diff.remote_only[0]
+        assert remote_item.remote_status == "deleted"
+        merged_paths = [v["path"] for v in diff.merged_remote["test"]["config"]["views"]]
+        assert merged_paths == ["a"]
+
+    def test_local_added_view_is_local_only(
+        self, mock_ha_client: HAClient, sync_config: MockSyncConfig
+    ) -> None:
+        """A view added only locally is reported local-only and not pulled."""
+        syncer = self._syncer(mock_ha_client, sync_config)
+        base = {"test": _entity([_view("a")])}
+        local = {"test": _entity([_view("a"), _view("b")])}
+        remote = {"test": _entity([_view("a")])}
+
+        diff = syncer.compute_view_three_way(base, local, remote)
+
+        assert not diff.conflicts
+        assert not diff.remote_only
+        assert [_fp_tail(i.file_path) for i in diff.local_only] == ["dashboards/test/b.yaml"]
+        # No remote change -> nothing to pull/merge.
+        assert "test" not in diff.merged_remote
+
+    def test_disjoint_plus_merge_keeps_local_when_both_change(
+        self, mock_ha_client: HAClient, sync_config: MockSyncConfig
+    ) -> None:
+        """Mixed: local edits A, remote edits B -> merged has both, pull writes both."""
+        syncer = self._syncer(mock_ha_client, sync_config)
+        base = {"test": _entity([_view("a"), _view("b"), _view("c")])}
+        local = {"test": _entity([_view("a", cards=[{"x": 1}]), _view("b"), _view("c")])}
+        remote = {"test": _entity([_view("a"), _view("b", cards=[{"y": 2}]), _view("c")])}
+
+        diff = syncer.compute_view_three_way(base, local, remote)
+
+        assert not diff.conflicts
+        merged = {v["path"]: v for v in diff.merged_remote["test"]["config"]["views"]}
+        assert merged["a"]["cards"] == [{"x": 1}]
+        assert merged["b"]["cards"] == [{"y": 2}]
+        assert merged["c"]["cards"] == []
+
+    def test_theirs_resolution_takes_remote_for_conflict(
+        self, mock_ha_client: HAClient, sync_config: MockSyncConfig
+    ) -> None:
+        """--theirs resolution folds the remote view into the merged config."""
+        syncer = self._syncer(mock_ha_client, sync_config)
+        base = {"test": _entity([_view("a"), _view("b")])}
+        local = {"test": _entity([_view("a", cards=[{"type": "local"}]), _view("b")])}
+        remote = {"test": _entity([_view("a", cards=[{"type": "remote"}]), _view("b")])}
+
+        diff = syncer.compute_view_three_way(base, local, remote, conflict_resolution="theirs")
+
+        merged = {v["path"]: v for v in diff.merged_remote["test"]["config"]["views"]}
+        assert merged["a"]["cards"] == [{"type": "remote"}]
+
+    def test_ours_resolution_keeps_local_for_conflict(
+        self, mock_ha_client: HAClient, sync_config: MockSyncConfig
+    ) -> None:
+        """--ours resolution keeps the local view in the merged config."""
+        syncer = self._syncer(mock_ha_client, sync_config)
+        base = {"test": _entity([_view("a")])}
+        local = {"test": _entity([_view("a", cards=[{"type": "local"}])])}
+        remote = {"test": _entity([_view("a", cards=[{"type": "remote"}])])}
+
+        diff = syncer.compute_view_three_way(base, local, remote, conflict_resolution="ours")
+
+        merged = {v["path"]: v for v in diff.merged_remote["test"]["config"]["views"]}
+        assert merged["a"]["cards"] == [{"type": "local"}]
+
+    def test_view_without_path_falls_back_to_title(
+        self, mock_ha_client: HAClient, sync_config: MockSyncConfig
+    ) -> None:
+        """Views lacking a path are keyed by title slug and don't crash."""
+        syncer = self._syncer(mock_ha_client, sync_config)
+        v_base = {"title": "No Path", "cards": []}
+        v_local = {"title": "No Path", "cards": [{"x": 1}]}
+        base = {"test": _entity([v_base])}
+        local = {"test": _entity([v_local])}
+        remote = {"test": _entity([v_base])}
+
+        diff = syncer.compute_view_three_way(base, local, remote)
+
+        assert not diff.conflicts
+        assert [_fp_tail(i.file_path) for i in diff.local_only] == ["dashboards/test/no_path.yaml"]
+
+    def test_strategy_dashboard_meta_only(
+        self, mock_ha_client: HAClient, sync_config: MockSyncConfig
+    ) -> None:
+        """Strategy-based dashboards (no views) diff via the meta unit only."""
+        syncer = self._syncer(mock_ha_client, sync_config)
+        base_cfg = {"meta": {"title": "S"}, "config": {"strategy": {"type": "original-states"}}}
+        local_cfg = {"meta": {"title": "S"}, "config": {"strategy": {"type": "original-states"}}}
+        remote_cfg = {"meta": {"title": "S"}, "config": {"strategy": {"type": "areas"}}}
+
+        diff = syncer.compute_view_three_way({"s": base_cfg}, {"s": local_cfg}, {"s": remote_cfg})
+
+        assert not diff.conflicts
+        assert [_fp_tail(i.file_path) for i in diff.remote_only] == ["dashboards/s/_meta.yaml"]
+        # Strategy dashboards keep no "views" key in the merged config.
+        assert "views" not in diff.merged_remote["s"]["config"]
+
+
 class TestDashboardSyncerDiffItemsIntegration:
     """Integration tests verifying diff/push consistency."""
 

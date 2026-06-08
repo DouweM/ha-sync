@@ -951,16 +951,8 @@ async def _pull_three_way(
             local = syncer.get_local_entities()
             remote = await syncer.get_remote_entities()
 
-            norm_fn = _get_normalize_fn(syncer)
             fp_fn = _get_file_path_fn(syncer, local, remote)
-            tw_result = compute_three_way_diff(
-                base,
-                local,
-                remote,
-                syncer.entity_type,
-                normalize_fn=norm_fn,
-                file_path_fn=fp_fn,
-            )
+            tw_result, merged_remote = _compute_syncer_three_way(syncer, base, local, remote)
 
             # For pull, we care about:
             # - remote_only items (will be pulled)
@@ -973,7 +965,7 @@ async def _pull_three_way(
                 conflicts = _filter_three_way_items(conflicts, file_filters, fp_fn)
 
             if remote_items or conflicts:
-                syncer_diffs.append((syncer, remote_items, conflicts, remote))
+                syncer_diffs.append((syncer, remote_items, conflicts, merged_remote))
 
         if not syncer_diffs:
             console.print("[dim]No changes to pull[/dim]")
@@ -1364,18 +1356,7 @@ async def _diff_three_way(config: SyncConfig, paths: list[str] | None) -> None:
             local = syncer.get_local_entities()
             remote = await syncer.get_remote_entities()
 
-            # Get normalize and file_path functions from syncer
-            norm_fn = _get_normalize_fn(syncer)
-            fp_fn = _get_file_path_fn(syncer, local, remote)
-
-            tw_result = compute_three_way_diff(
-                base,
-                local,
-                remote,
-                syncer.entity_type,
-                normalize_fn=norm_fn,
-                file_path_fn=fp_fn,
-            )
+            tw_result, _merged = _compute_syncer_three_way(syncer, base, local, remote)
 
             if file_filters:
                 tw_result = ThreeWayDiffResult(
@@ -1513,6 +1494,44 @@ def _get_file_path_fn(
         return rel_path(syncer.local_path / filename)
 
     return fp
+
+
+def _compute_syncer_three_way(
+    syncer: BaseSyncer,
+    base: dict[str, dict[str, Any]],
+    local: dict[str, dict[str, Any]],
+    remote: dict[str, dict[str, Any]],
+) -> tuple[ThreeWayDiffResult, dict[str, dict[str, Any]]]:
+    """Compute a three-way diff for a syncer.
+
+    For dashboards, this delegates to per-view three-way diffing so that
+    disjoint local/remote view edits auto-merge instead of conflicting. The
+    returned second element is a per-dashboard "merged remote" dict (the
+    reassembled config to write on pull); for non-dashboard syncers it's the
+    plain remote dict, so callers can uniformly pull from it.
+    """
+    if isinstance(syncer, DashboardSyncer):
+        view_diff = syncer.compute_view_three_way(base, local, remote)
+        result = ThreeWayDiffResult(
+            local_only=view_diff.local_only,
+            remote_only=view_diff.remote_only,
+            conflicts=view_diff.conflicts,
+        )
+        # Fall back to raw remote for any dashboard without a merged entry.
+        merged = {**remote, **view_diff.merged_remote}
+        return result, merged
+
+    norm_fn = _get_normalize_fn(syncer)
+    fp_fn = _get_file_path_fn(syncer, local, remote)
+    result = compute_three_way_diff(
+        base,
+        local,
+        remote,
+        syncer.entity_type,
+        normalize_fn=norm_fn,
+        file_path_fn=fp_fn,
+    )
+    return result, remote
 
 
 def _filter_three_way_items(
@@ -1963,16 +1982,7 @@ async def _sync_three_way(
             local = syncer.get_local_entities()
             remote = await syncer.get_remote_entities()
 
-            norm_fn = _get_normalize_fn(syncer)
-            fp_fn = _get_file_path_fn(syncer, local, remote)
-            tw_result = compute_three_way_diff(
-                base,
-                local,
-                remote,
-                syncer.entity_type,
-                normalize_fn=norm_fn,
-                file_path_fn=fp_fn,
-            )
+            tw_result, merged_remote = _compute_syncer_three_way(syncer, base, local, remote)
 
             # Apply file filters
             if file_filters:
@@ -1982,7 +1992,7 @@ async def _sync_three_way(
                     conflicts=_filter_three_way_items(tw_result.conflicts, file_filters),
                 )
 
-            syncer_diffs.append((syncer, tw_result, remote))
+            syncer_diffs.append((syncer, tw_result, merged_remote))
 
         # Display preview
         all_local = [item for _, tw, _ in syncer_diffs for item in tw.local_only]
@@ -2062,8 +2072,13 @@ async def _sync_three_way(
 
             # Push local-only changes
             if tw_result.local_only:
-                # Convert ThreeWayDiffItems to DiffItems for push
-                push_items = _three_way_to_diff_items(tw_result.local_only, direction="push")
+                if isinstance(syncer, DashboardSyncer):
+                    # Per-view items collapse to one DiffItem per dashboard; the
+                    # status must reflect whether the *dashboard* exists in HA
+                    # (an added view on an existing dashboard is still an update).
+                    push_items = _dashboard_push_items(tw_result.local_only, remote)
+                else:
+                    push_items = _three_way_to_diff_items(tw_result.local_only, direction="push")
                 if push_items:
                     await syncer.push(
                         sync_deletions=sync_deletions,
@@ -2073,7 +2088,11 @@ async def _sync_three_way(
 
             # Handle conflicts
             if tw_result.conflicts:
-                if theirs:
+                if isinstance(syncer, DashboardSyncer):
+                    await _resolve_dashboard_conflicts(
+                        syncer, tw_result.conflicts, theirs, ours, sync_deletions
+                    )
+                elif theirs:
                     # Accept remote: pull conflicted entities (additions + modifications)
                     remote_to_pull = {
                         item.entity_id: remote[item.entity_id]
@@ -2104,26 +2123,104 @@ async def _sync_three_way(
         console.print("\n[green]Sync complete![/green]")
 
 
+def _dashboard_push_items(
+    items: list[ThreeWayDiffItem],
+    remote: dict[str, dict[str, Any]],
+) -> list[DiffItem]:
+    """Collapse per-view dashboard diff items into one DiffItem per dashboard.
+
+    Status is "modified" when the dashboard already exists in HA (so push
+    updates it as a unit) and "added" only for brand-new dashboards.
+    """
+    by_dir: dict[str, DiffItem] = {}
+    for item in items:
+        dir_name = item.entity_id
+        if dir_name in by_dir:
+            continue
+        status = "modified" if dir_name in remote else "added"
+        by_dir[dir_name] = DiffItem(
+            entity_id=dir_name,
+            status=status,
+            entity_type=item.entity_type,
+            file_path=item.file_path,
+        )
+    return list(by_dir.values())
+
+
+async def _resolve_dashboard_conflicts(
+    syncer: DashboardSyncer,
+    conflicts: list[ThreeWayDiffItem],
+    theirs: bool,
+    ours: bool,
+    sync_deletions: bool,
+) -> None:
+    """Resolve per-view dashboard conflicts for --theirs / --ours.
+
+    Recomputes the per-view three-way with the chosen resolution so only the
+    conflicted views are taken from the winning side, leaving disjoint edits in
+    the same dashboard intact. The merged config is written to disk; for --ours
+    it is also pushed so the local resolution reaches HA.
+    """
+    if not (theirs or ours):
+        return
+
+    resolution = "theirs" if theirs else "ours"
+    base = syncer.get_base_entities()
+    local = syncer.get_local_entities()
+    remote = await syncer.get_remote_entities()
+
+    view_diff = syncer.compute_view_three_way(base, local, remote, conflict_resolution=resolution)
+
+    conflicted_dirs = {item.entity_id for item in conflicts}
+    merged_to_write = {
+        dir_name: data
+        for dir_name, data in view_diff.merged_remote.items()
+        if dir_name in conflicted_dirs
+    }
+
+    if merged_to_write:
+        # Write the per-view resolution to disk.
+        await syncer.pull(sync_deletions=False, dry_run=False, remote=merged_to_write)
+
+    if ours and conflicted_dirs:
+        # Push the (now reconciled) local dashboards back to HA.
+        push_items = [
+            DiffItem(entity_id=dir_name, status="modified") for dir_name in sorted(conflicted_dirs)
+        ]
+        await syncer.push(sync_deletions=sync_deletions, dry_run=False, diff_items=push_items)
+
+
 def _three_way_to_diff_items(items: list[ThreeWayDiffItem], direction: str) -> list[DiffItem]:
-    """Convert ThreeWayDiffItems to DiffItems for push/pull operations."""
-    result: list[DiffItem] = []
+    """Convert ThreeWayDiffItems to DiffItems for push/pull operations.
+
+    Dedupes by entity_id: per-view dashboard diffs produce several items sharing
+    one dir-name entity_id, but pushing saves the whole dashboard at once, so we
+    must emit a single DiffItem per dashboard. (Non-dashboard entity_ids are
+    unique, so dedup is a no-op there.) A "modified" status wins over "added"
+    when collapsing, since an existing remote dashboard is being updated.
+    """
+    by_id: dict[str, DiffItem] = {}
     for item in items:
         status = item.local_status if direction == "push" else item.remote_status
 
         if status is None:
             continue
 
-        result.append(
-            DiffItem(
-                entity_id=item.entity_id,
-                status=status,
-                entity_type=item.entity_type,
-                local=item.local,
-                remote=item.remote,
-                file_path=item.file_path,
-            )
+        existing = by_id.get(item.entity_id)
+        if existing is not None:
+            if existing.status == "modified" or status == "modified":
+                existing.status = "modified"
+            continue
+
+        by_id[item.entity_id] = DiffItem(
+            entity_id=item.entity_id,
+            status=status,
+            entity_type=item.entity_type,
+            local=item.local,
+            remote=item.remote,
+            file_path=item.file_path,
         )
-    return result
+    return list(by_id.values())
 
 
 @app.command()

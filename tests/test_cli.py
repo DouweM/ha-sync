@@ -8,13 +8,17 @@ from typer.testing import CliRunner
 
 from ha_sync.cli import (
     _check_file_staleness,
+    _compute_syncer_three_way,
+    _dashboard_push_items,
     _get_file_path_fn,
     _matches_filter,
     _record_file_states,
+    _three_way_to_diff_items,
     app,
 )
 from ha_sync.sync.base import DiffItem
 from ha_sync.sync.dashboards import DashboardSyncer
+from ha_sync.sync.three_way import ThreeWayDiffItem
 
 from .conftest import MockSyncConfig, SampleAutomation, create_automation_file
 
@@ -457,3 +461,123 @@ class TestStalenessDetection:
         # Should not crash, just not record the missing file
         states = _record_file_states(diff_items)
         assert len(states) == 0
+
+
+def _dash_entity(views: list[dict]) -> dict:
+    meta = {"title": "Test", "url_path": "dashboard-test"}
+    return {"meta": meta, "config": {"views": views}}
+
+
+def _v(path: str, cards: list | None = None) -> dict:
+    return {"path": path, "title": path.title(), "cards": cards or []}
+
+
+class TestComputeSyncerThreeWayDispatch:
+    """_compute_syncer_three_way routes dashboards through per-view diffing
+    and leaves other entity types on the generic engine.
+    """
+
+    def test_dashboard_disjoint_edits_auto_merge(self, sync_config: MockSyncConfig) -> None:
+        syncer = DashboardSyncer(MagicMock(), sync_config)
+        base = {"test": _dash_entity([_v("a"), _v("b")])}
+        local = {"test": _dash_entity([_v("a", cards=[{"l": 1}]), _v("b")])}
+        remote = {"test": _dash_entity([_v("a"), _v("b", cards=[{"r": 2}])])}
+
+        result, merged = _compute_syncer_three_way(syncer, base, local, remote)
+
+        # No conflict: edits target different views.
+        assert not result.conflicts
+        assert result.local_only and result.remote_only
+        # merged remote for the dashboard combines both edits.
+        merged_views = {v["path"]: v for v in merged["test"]["config"]["views"]}
+        assert merged_views["a"]["cards"] == [{"l": 1}]
+        assert merged_views["b"]["cards"] == [{"r": 2}]
+
+    def test_dashboard_same_view_conflict(self, sync_config: MockSyncConfig) -> None:
+        syncer = DashboardSyncer(MagicMock(), sync_config)
+        base = {"test": _dash_entity([_v("a")])}
+        local = {"test": _dash_entity([_v("a", cards=[{"l": 1}])])}
+        remote = {"test": _dash_entity([_v("a", cards=[{"r": 2}])])}
+
+        result, merged = _compute_syncer_three_way(syncer, base, local, remote)
+
+        assert len(result.conflicts) == 1
+        # No auto-pull while the same view diverges.
+        assert "test" not in merged or merged["test"] == remote["test"]
+
+    def test_non_dashboard_uses_generic_engine(self, sync_config: MockSyncConfig) -> None:
+        from ha_sync.sync.automations import AutomationSyncer
+
+        syncer = AutomationSyncer(MagicMock(), sync_config)
+        base = {"a": {"id": "a", "alias": "Old"}}
+        local = {"a": {"id": "a", "alias": "New"}}
+        remote = {"a": {"id": "a", "alias": "Old"}}
+
+        result, merged = _compute_syncer_three_way(syncer, base, local, remote)
+
+        # Generic engine: returns plain remote unchanged, one local_only item.
+        assert merged is remote
+        assert len(result.local_only) == 1
+        assert result.local_only[0].entity_id == "a"
+
+
+class TestThreeWayToDiffItemsDedup:
+    """Per-view dashboard items collapse to one DiffItem per dashboard."""
+
+    def test_dedup_collapses_views_and_prefers_modified(self) -> None:
+        items = [
+            ThreeWayDiffItem(
+                entity_id="test",
+                entity_type="dashboard",
+                change_location="local_only",
+                local_status="added",
+                remote_status=None,
+                base=None,
+                local={"path": "new"},
+                remote=None,
+            ),
+            ThreeWayDiffItem(
+                entity_id="test",
+                entity_type="dashboard",
+                change_location="local_only",
+                local_status="modified",
+                remote_status=None,
+                base={"path": "old"},
+                local={"path": "old2"},
+                remote=None,
+            ),
+        ]
+        result = _three_way_to_diff_items(items, direction="push")
+        assert len(result) == 1
+        assert result[0].entity_id == "test"
+        assert result[0].status == "modified"
+
+    def test_dashboard_push_items_status_from_remote_presence(self) -> None:
+        items = [
+            ThreeWayDiffItem(
+                entity_id="existing",
+                entity_type="dashboard",
+                change_location="local_only",
+                local_status="added",  # a new view on an existing dashboard
+                remote_status=None,
+                base=None,
+                local={"path": "new"},
+                remote=None,
+                file_path="dashboards/existing/new.yaml",
+            ),
+            ThreeWayDiffItem(
+                entity_id="brand_new",
+                entity_type="dashboard",
+                change_location="local_only",
+                local_status="added",
+                remote_status=None,
+                base=None,
+                local={"path": "x"},
+                remote=None,
+                file_path="dashboards/brand_new/x.yaml",
+            ),
+        ]
+        remote = {"existing": {"meta": {}, "config": {"views": []}}}
+        result = {i.entity_id: i.status for i in _dashboard_push_items(items, remote)}
+        # Existing dashboard -> update; brand-new -> create.
+        assert result == {"existing": "modified", "brand_new": "added"}
