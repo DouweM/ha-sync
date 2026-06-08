@@ -6,12 +6,47 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 from typer.testing import CliRunner
 
-from ha_sync.cli import _check_file_staleness, _record_file_states, app
+from ha_sync.cli import (
+    _check_file_staleness,
+    _get_file_path_fn,
+    _matches_filter,
+    _record_file_states,
+    app,
+)
 from ha_sync.sync.base import DiffItem
+from ha_sync.sync.dashboards import DashboardSyncer
 
 from .conftest import MockSyncConfig, SampleAutomation, create_automation_file
 
 runner = CliRunner()
+
+
+class TestDashboardFilePathFilter:
+    """A dashboard is a directory of view files. Its three-way diff item must use
+    the directory path so that filtering by an individual view file still matches
+    the dashboard-level item (otherwise per-view pull/diff silently drops dashboard
+    conflicts and reports "No changes" while remote edits exist).
+    """
+
+    def test_dashboard_file_path_is_directory(self, sync_config: MockSyncConfig) -> None:
+        syncer = DashboardSyncer(MagicMock(), sync_config)
+        fp_fn = _get_file_path_fn(syncer, local={"welcome": {}}, remote={"welcome": {}})
+        assert fp_fn is not None
+        fp = fp_fn("welcome")
+        assert fp is not None
+        # Directory path, not a fake "welcome.yaml" with a suffix
+        assert not fp.endswith(".yaml")
+        assert Path(fp).name == "welcome"
+
+    def test_per_view_filter_matches_dashboard_item(self, sync_config: MockSyncConfig) -> None:
+        syncer = DashboardSyncer(MagicMock(), sync_config)
+        fp_fn = _get_file_path_fn(syncer, local={"welcome": {}}, remote={"welcome": {}})
+        assert fp_fn is not None
+        fp = fp_fn("welcome")
+        assert fp is not None
+        view_filter = Path(fp) / "00_oasis.yaml"
+        # The conflict on the whole dashboard must surface when pulling one view
+        assert _matches_filter(fp, view_filter)
 
 
 class TestPushCommand:

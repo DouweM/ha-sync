@@ -1490,10 +1490,18 @@ def _get_file_path_fn(
     opaque numeric id). Falls back to ``<id>.yaml`` when no config is available.
     """
     from ha_sync.sync.base import SimpleEntitySyncer
+    from ha_sync.sync.dashboards import DashboardSyncer
     from ha_sync.utils import filename_from_id
     from ha_sync.utils import relative_path as rel_path
 
     def fp(entity_id: str) -> str | None:
+        # Dashboards are stored as a directory of view files, not a single file.
+        # Return the directory path (no .yaml suffix) so that filtering by an
+        # individual view file (e.g. dashboards/welcome/00_oasis.yaml) still matches
+        # the dashboard-level diff item. Otherwise a per-view pull/diff silently drops
+        # dashboard conflicts and reports "No changes" while remote edits exist.
+        if isinstance(syncer, DashboardSyncer):
+            return rel_path(syncer.local_path / entity_id)
         local_cfg = (local or {}).get(entity_id)
         if local_cfg and local_cfg.get("_filename"):
             filename = local_cfg["_filename"]
