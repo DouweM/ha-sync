@@ -1470,9 +1470,9 @@ def _get_file_path_fn(
     ``get_filename`` (so e.g. scenes show as ``good_morning.yaml``, not their
     opaque numeric id). Falls back to ``<id>.yaml`` when no config is available.
     """
-    from ha_sync.sync.base import SimpleEntitySyncer
+    from ha_sync.sync.base import ConfigEntryBasedSyncer, SimpleEntitySyncer
     from ha_sync.sync.dashboards import DashboardSyncer
-    from ha_sync.utils import filename_from_id
+    from ha_sync.utils import filename_from_id, filename_from_name
     from ha_sync.utils import relative_path as rel_path
 
     def fp(entity_id: str) -> str | None:
@@ -1483,6 +1483,18 @@ def _get_file_path_fn(
         # dashboard conflicts and reports "No changes" while remote edits exist.
         if isinstance(syncer, DashboardSyncer):
             return rel_path(syncer.local_path / entity_id)
+        # Subtype-based helpers (templates, groups) live in a subtype subdirectory
+        # (e.g. helpers/template/binary_sensor/foo.yaml) and use "subtype/entry_id"
+        # entity ids. Joining the bare filename onto local_path would drop the
+        # subtype dir, so path filters never match and diff reports "No differences".
+        if isinstance(syncer, ConfigEntryBasedSyncer):
+            cfg = (local or {}).get(entity_id) or (remote or {}).get(entity_id) or {}
+            subtype = cfg.get("subtype") or entity_id.split("/")[0]
+            entry_id = cfg.get("entry_id") or entity_id.split("/")[-1]
+            filename = cfg.get("_filename") or filename_from_name(
+                cfg.get("name", entry_id), entry_id
+            )
+            return rel_path(syncer._subtype_path(subtype) / filename)
         local_cfg = (local or {}).get(entity_id)
         if local_cfg and local_cfg.get("_filename"):
             filename = local_cfg["_filename"]

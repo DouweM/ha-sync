@@ -18,6 +18,7 @@ from ha_sync.cli import (
 )
 from ha_sync.sync.base import DiffItem
 from ha_sync.sync.dashboards import DashboardSyncer
+from ha_sync.sync.templates import TemplateSyncer
 from ha_sync.sync.three_way import ThreeWayDiffItem
 
 from .conftest import MockSyncConfig, SampleAutomation, create_automation_file
@@ -51,6 +52,46 @@ class TestDashboardFilePathFilter:
         view_filter = Path(fp) / "00_oasis.yaml"
         # The conflict on the whole dashboard must surface when pulling one view
         assert _matches_filter(fp, view_filter)
+
+
+class TestTemplateHelperFilePathFilter:
+    """Subtype-based helpers live in a subtype subdirectory
+    (helpers/template/binary_sensor/foo.yaml) and use "subtype/entry_id" entity ids.
+    The three-way file path must include the subtype dir, otherwise path filters
+    never match and diff reports "No differences" despite real local changes.
+    """
+
+    def test_file_path_includes_subtype_dir(self, sync_config: MockSyncConfig) -> None:
+        syncer = TemplateSyncer(MagicMock(), sync_config)
+        local = {
+            "binary_sensor/abc123": {
+                "subtype": "binary_sensor",
+                "_filename": "parcel_today.yaml",
+                "entry_id": "abc123",
+                "name": "Parcel Today",
+            }
+        }
+        fp_fn = _get_file_path_fn(syncer, local=local, remote={})
+        assert fp_fn is not None
+        fp = fp_fn("binary_sensor/abc123")
+        assert fp is not None
+        assert fp.endswith("helpers/template/binary_sensor/parcel_today.yaml")
+        assert _matches_filter(fp, Path(fp))
+
+    def test_remote_only_falls_back_to_name(self, sync_config: MockSyncConfig) -> None:
+        syncer = TemplateSyncer(MagicMock(), sync_config)
+        remote = {
+            "sensor/def456": {
+                "subtype": "sensor",
+                "entry_id": "def456",
+                "name": "My Sensor",
+            }
+        }
+        fp_fn = _get_file_path_fn(syncer, local={}, remote=remote)
+        assert fp_fn is not None
+        fp = fp_fn("sensor/def456")
+        assert fp is not None
+        assert fp.endswith("helpers/template/sensor/my_sensor.yaml")
 
 
 class TestPushCommand:

@@ -112,6 +112,39 @@ def test_git_read_file_not_found(tmp_path: Path) -> None:
         os.chdir(old_cwd)
 
 
+
+def test_git_read_file_from_repo_subdir(tmp_path: Path) -> None:
+    """git_read_file must resolve paths relative to the cwd, not the repo root.
+
+    The sync directory may be a subdirectory of a larger repo (e.g.
+    repo/home/homeassistant/ha-sync). A bare "HEAD:path" is repo-root-relative,
+    which silently returns None for every file and empties the three-way base.
+    """
+    _init_git_repo(tmp_path)
+
+    subdir = tmp_path / "nested" / "sync-dir"
+    subdir.mkdir(parents=True)
+    (subdir / "test.yaml").write_text("id: test\nname: Hello\n")
+    subprocess.run(["git", "add", "."], cwd=tmp_path, capture_output=True, check=True)
+    subprocess.run(
+        ["git", "commit", "-m", "init"],
+        cwd=tmp_path,
+        capture_output=True,
+        check=True,
+    )
+
+    import os
+
+    old_cwd = os.getcwd()
+    try:
+        os.chdir(subdir)
+        content = git_read_file("test.yaml")
+        assert content is not None
+        assert "id: test" in content
+    finally:
+        os.chdir(old_cwd)
+
+
 def test_git_list_files(tmp_path: Path) -> None:
     """List files in a directory from git HEAD."""
     _init_git_repo(tmp_path)

@@ -59,8 +59,11 @@ def git_read_file(path: str) -> str | None:
         File content as string, or None if the file doesn't exist in HEAD.
     """
     try:
+        # The "./" prefix makes the path cwd-relative; a bare path would be
+        # interpreted relative to the repo root, which breaks when the sync
+        # directory is a subdirectory of a larger repo.
         result = subprocess.run(
-            ["git", "show", f"HEAD:{path}"],
+            ["git", "show", f"HEAD:./{path}"],
             capture_output=True,
             text=True,
             check=False,
