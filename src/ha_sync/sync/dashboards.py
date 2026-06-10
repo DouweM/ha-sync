@@ -814,7 +814,7 @@ class DashboardSyncer(BaseSyncer):
         return units
 
     def _view_file_path(self, dir_name: str, view: dict[str, Any]) -> str:
-        """Relative path of the view file for diff reporting (display only)."""
+        """Relative path of the view file for diff reporting and path filtering."""
         path = view.get("path")
         title = view.get("title")
         if path:
@@ -823,7 +823,15 @@ class DashboardSyncer(BaseSyncer):
             stem = slugify(str(title))
         else:
             stem = "view"
-        return relative_path(self.local_path / dir_name / f"{stem}.yaml")
+        # Saved view files carry a numeric ordering prefix (e.g. 00_oasis.yaml),
+        # so prefer the actual on-disk file. Otherwise path filters like
+        # `diff dashboards/welcome/00_oasis.yaml` never match the reported path
+        # and the diff silently comes back empty.
+        dashboard_dir = self.local_path / dir_name
+        matches = sorted(dashboard_dir.glob(f"[0-9][0-9]_{stem}.yaml"))
+        if matches:
+            return relative_path(matches[0])
+        return relative_path(dashboard_dir / f"{stem}.yaml")
 
     def compute_view_three_way(
         self,

@@ -679,3 +679,28 @@ class TestDashboardSyncerDiffItemsIntegration:
         # Should have pushed exactly the items from diff
         assert "to_add" in result.created
         assert "to_modify" in result.updated
+
+
+class TestViewFilePath:
+    """Diff items must report the real on-disk view file path."""
+
+    def test_prefers_on_disk_prefixed_file(
+        self, mock_ha_client: HAClient, sync_config: MockSyncConfig
+    ) -> None:
+        """Saved view files carry a numeric prefix (e.g. 00_a.yaml). If the
+        diff item reports a.yaml instead, path filters like
+        `diff dashboards/test/00_a.yaml` silently drop the item and the diff
+        lies with "No differences".
+        """
+        syncer = DashboardSyncer(mock_ha_client, sync_config)
+        view_dir = syncer.local_path / "test"
+        view_dir.mkdir(parents=True, exist_ok=True)
+        (view_dir / "00_a.yaml").write_text("position: 1\npath: a\n")
+
+        base = {"test": _entity([_view("a")])}
+        local = {"test": _entity([_view("a", cards=[{"type": "local"}])])}
+        remote = {"test": _entity([_view("a")])}
+
+        diff = syncer.compute_view_three_way(base, local, remote)
+
+        assert {_fp_tail(i.file_path) for i in diff.local_only} == {"dashboards/test/00_a.yaml"}

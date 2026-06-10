@@ -132,30 +132,66 @@ class HAClient:
         if not self._ws:
             raise NotConnected("Not connected to Home Assistant")
 
-        self._msg_id += 1
-        msg_id = self._msg_id
-
         with logfire.span(
             "WebSocket: {command_type}", command_type=command_type, request=kwargs
         ) as span:
-            await self._ws.send_json({"id": msg_id, "type": command_type, **kwargs})
+            try:
+                return await self._send_command_once(command_type, kwargs, span)
+            except ConnectionFailed:
+                # The connection can idle out (or HA can close it) while other
+                # syncers do slow HTTP work between commands. Reconnect and
+                # retry once instead of failing the whole operation.
+                logfire.warning(
+                    "WebSocket connection lost; reconnecting and retrying {command_type}",
+                    command_type=command_type,
+                )
+                await self._cleanup_ws()
+                await self.connect()
+                return await self._send_command_once(command_type, kwargs, span)
 
-            # Wait for response with matching ID
-            while True:
-                response = await self._ws.receive_json()
-                if response.get("id") == msg_id:
-                    if not response.get("success", True):
-                        error = response.get("error", {})
-                        code = error.get("code", "error")
-                        msg = error.get("message", "Unknown error")
-                        logfire.warning(
-                            "WebSocket command failed: {code}: {msg}", code=code, msg=msg
-                        )
-                        raise Exception(f"{code}: {msg}")
-                    result = response.get("result")
-                    span.set_attribute("response", result)
-                    return result
-                # Skip events and other messages
+    async def _send_command_once(self, command_type: str, kwargs: dict[str, Any], span: Any) -> Any:
+        """Send a command on the current connection and wait for its response.
+
+        Raises ConnectionFailed if the connection turns out to be closed, so
+        the caller can reconnect and retry.
+        """
+        assert self._ws is not None
+        self._msg_id += 1
+        msg_id = self._msg_id
+
+        try:
+            await self._ws.send_json({"id": msg_id, "type": command_type, **kwargs})
+        except (ConnectionResetError, aiohttp.ClientError) as e:
+            raise ConnectionFailed(str(e)) from e
+
+        # Wait for response with matching ID
+        while True:
+            msg = await self._ws.receive()
+            if msg.type in (
+                aiohttp.WSMsgType.CLOSE,
+                aiohttp.WSMsgType.CLOSING,
+                aiohttp.WSMsgType.CLOSED,
+                aiohttp.WSMsgType.ERROR,
+            ):
+                raise ConnectionFailed(
+                    f"WebSocket connection closed while waiting for {command_type} response"
+                )
+            if msg.type != aiohttp.WSMsgType.TEXT:
+                continue
+            response = msg.json()
+            if response.get("id") == msg_id:
+                if not response.get("success", True):
+                    error = response.get("error", {})
+                    code = error.get("code", "error")
+                    msg_text = error.get("message", "Unknown error")
+                    logfire.warning(
+                        "WebSocket command failed: {code}: {msg}", code=code, msg=msg_text
+                    )
+                    raise Exception(f"{code}: {msg_text}")
+                result = response.get("result")
+                span.set_attribute("response", result)
+                return result
+            # Skip events and other messages
 
     @logfire.instrument("Call service: {domain}.{service}")
     async def call_service(

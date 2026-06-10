@@ -1121,10 +1121,10 @@ async def _pull(
                 sync_deletions=sync_deletions, dry_run=dry_run, remote=remote
             )
 
-            if not result.has_changes:
-                console.print("  [dim]No changes[/dim]")
-            elif result.has_errors:
+            if result.has_errors:
                 console.print(f"  [yellow]Completed with {len(result.errors)} errors[/yellow]")
+            elif not result.has_changes:
+                console.print("  [dim]No changes[/dim]")
             else:
                 total = len(result.created) + len(result.updated) + len(result.deleted)
                 if dry_run:
@@ -1271,10 +1271,10 @@ async def _push(
                 diff_items=syncer_items,
             )
 
-            if not result.has_changes:
-                console.print("  [dim]No changes[/dim]")
-            elif result.has_errors:
+            if result.has_errors:
                 console.print(f"  [yellow]Completed with {len(result.errors)} errors[/yellow]")
+            elif not result.has_changes:
+                console.print("  [dim]No changes[/dim]")
             else:
                 total = (
                     len(result.created)
