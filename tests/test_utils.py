@@ -112,7 +112,6 @@ def test_git_read_file_not_found(tmp_path: Path) -> None:
         os.chdir(old_cwd)
 
 
-
 def test_git_read_file_from_repo_subdir(tmp_path: Path) -> None:
     """git_read_file must resolve paths relative to the cwd, not the repo root.
 
