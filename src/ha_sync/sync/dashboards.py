@@ -377,11 +377,13 @@ class DashboardSyncer(BaseSyncer):
 
             try:
                 if dir_name in local:
-                    # Check if changed using normalized comparison
+                    # Check if changed using normalized comparison, metadata
+                    # included -- see _dashboard_document.
                     local_config = self._load_dashboard_locally(dir_name)
-                    local_normalized = self._normalize_config(local_config or {})
-                    remote_normalized = self._normalize_config(config)
-                    if dump_yaml(remote_normalized) != dump_yaml(local_normalized):
+                    local_meta = local[dir_name].get("meta") or {}
+                    local_document = self._dashboard_document(local_meta, local_config or {})
+                    remote_document = self._dashboard_document(meta, config)
+                    if remote_document != local_document:
                         if dry_run:
                             console.print(f"  [cyan]Would update[/cyan] {rel_dir_path}/")
                             self._print_all_files(dashboard_dir, "cyan", "Would update")
@@ -796,6 +798,21 @@ class DashboardSyncer(BaseSyncer):
                 unit[key] = value
         return unit
 
+    def _dashboard_document(self, meta: dict[str, Any], config: dict[str, Any]) -> dict[str, Any]:
+        """Build a comparable dict covering everything stored for a dashboard.
+
+        ``_normalize_config`` only sees the config, but ``_meta.yaml`` also
+        carries the dashboard-level metadata (title, icon, sidebar/admin flags).
+        Comparing configs alone therefore misses metadata-only changes entirely,
+        which for a strategy dashboard -- no view files at all -- means missing
+        every change it can have.
+        """
+        document = self._meta_unit(meta, config)
+        normalized = self._normalize_config(config)
+        if "views" in normalized:
+            document["views"] = normalized["views"]
+        return document
+
     def _split_into_units(self, entity: dict[str, Any] | None) -> dict[str, dict[str, Any]]:
         """Split a dashboard ``{"meta", "config"}`` into per-view + meta units.
 
@@ -1092,30 +1109,31 @@ class DashboardSyncer(BaseSyncer):
             dir_path = self.local_path / dir_name
             rel_path = relative_path(dir_path)
 
-            # Normalize local config for comparison and display
-            local_normalized = self._normalize_config(local_config)
+            # Compare (and display) metadata alongside the config, so that
+            # metadata-only changes aren't invisible -- see _dashboard_document.
+            local_document = self._dashboard_document(local_data["meta"], local_config)
 
             if dir_name not in remote:
                 items.append(
                     DiffItem(
                         entity_id=dir_name,
                         status="added",
-                        local=local_normalized,
+                        local=local_document,
                         file_path=rel_path,
                     )
                 )
             else:
-                remote_config = remote[dir_name]["config"]
-                # Normalize both configs for comparison and display
-                remote_normalized = self._normalize_config(remote_config)
+                remote_document = self._dashboard_document(
+                    remote[dir_name]["meta"], remote[dir_name]["config"]
+                )
 
-                if dump_yaml(local_normalized) != dump_yaml(remote_normalized):
+                if local_document != remote_document:
                     items.append(
                         DiffItem(
                             entity_id=dir_name,
                             status="modified",
-                            local=local_normalized,
-                            remote=remote_normalized,
+                            local=local_document,
+                            remote=remote_document,
                             file_path=rel_path,
                         )
                     )
@@ -1126,12 +1144,14 @@ class DashboardSyncer(BaseSyncer):
                 dir_path = self.local_path / dir_name
                 rel_path = relative_path(dir_path)
                 # Normalize for consistent display
-                remote_normalized = self._normalize_config(remote[dir_name]["config"])
+                remote_document = self._dashboard_document(
+                    remote[dir_name]["meta"], remote[dir_name]["config"]
+                )
                 items.append(
                     DiffItem(
                         entity_id=dir_name,
                         status="deleted",
-                        remote=remote_normalized,
+                        remote=remote_document,
                         file_path=rel_path,
                     )
                 )
