@@ -20,11 +20,21 @@ class NotConnected(Exception):
     """Not connected to Home Assistant."""
 
 
+class HACommandError(Exception):
+    """Home Assistant WebSocket command returned success: false."""
+
+    def __init__(self, code: str, message: str) -> None:
+        self.code = code
+        self.ha_message = message
+        super().__init__(f"{code}: {message}")
+
+
 __all__ = [
     "AuthenticationFailed",
     "ConnectionFailed",
     "HAAPIError",
     "HAClient",
+    "HACommandError",
     "NotConnected",
 ]
 
@@ -187,7 +197,7 @@ class HAClient:
                     logfire.warning(
                         "WebSocket command failed: {code}: {msg}", code=code, msg=msg_text
                     )
-                    raise Exception(f"{code}: {msg_text}")
+                    raise HACommandError(code, msg_text)
                 result = response.get("result")
                 span.set_attribute("response", result)
                 return result
