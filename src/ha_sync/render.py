@@ -211,6 +211,13 @@ class ViewResolver:
         except Exception:
             return "[error]"
 
+    @staticmethod
+    def _state_matches(state: str, expected: str | list[str]) -> bool:
+        """Check if a state equals the expected value, or any of a list of values."""
+        if isinstance(expected, list):
+            return any(state == str(e) for e in expected)
+        return state == str(expected)
+
     def check_visibility(self, conditions: list[VisibilityCondition]) -> bool:
         """Check if visibility conditions are met. Returns True if visible."""
         if not conditions:
@@ -221,9 +228,11 @@ class ViewResolver:
                 if not condition.entity:
                     return False
                 state = self.get_state(condition.entity)
-                if condition.state is not None and state != str(condition.state):
+                if condition.state is not None and not self._state_matches(state, condition.state):
                     return False
-                if condition.state_not is not None and state == str(condition.state_not):
+                if condition.state_not is not None and self._state_matches(
+                    state, condition.state_not
+                ):
                     return False
 
             elif isinstance(condition, VisibilityConditionNumericState):

@@ -275,6 +275,32 @@ class TestConfigModels:
         assert isinstance(badge.visibility[0], VisibilityConditionState)
         assert isinstance(badge.visibility[2], VisibilityConditionOr)
 
+    def test_visibility_condition_state_accepts_list(self) -> None:
+        """HA allows state/state_not to be a single string or a list of strings."""
+        badge = EntityBadgeConfig.model_validate(
+            {
+                "entity": "sensor.parcel_today",
+                "visibility": [
+                    {
+                        "condition": "state",
+                        "entity": "sensor.parcel_today",
+                        "state_not": ["unknown", "unavailable"],
+                    },
+                    {
+                        "condition": "state",
+                        "entity": "media_player.tv",
+                        "state": ["playing", "paused"],
+                    },
+                ],
+            }
+        )
+        condition = badge.visibility[0]
+        assert isinstance(condition, VisibilityConditionState)
+        assert condition.state_not == ["unknown", "unavailable"]
+        condition = badge.visibility[1]
+        assert isinstance(condition, VisibilityConditionState)
+        assert condition.state == ["playing", "paused"]
+
     def test_extra_fields_allowed(self) -> None:
         """Config models allow extra fields (HA has many we don't need)."""
         tile = TileCardConfig.model_validate(

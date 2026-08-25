@@ -236,8 +236,8 @@ class VisibilityConditionState(BaseModel):
 
     condition: Literal["state"]
     entity: str | None = None
-    state: str | None = None
-    state_not: str | None = None
+    state: str | list[str] | None = None
+    state_not: str | list[str] | None = None
 
 
 class VisibilityConditionNumericState(BaseModel):
