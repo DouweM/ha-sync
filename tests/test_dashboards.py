@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from ha_sync.client import HAClient
+from ha_sync.client import ConnectionFailed, HAClient, HACommandError
 from ha_sync.sync.base import DiffItem
 from ha_sync.sync.dashboards import DashboardSyncer
 
@@ -350,6 +350,72 @@ class TestDashboardSyncerPull:
 
         # But no directory should exist
         assert not (sync_config.dashboards_path / "lovelace").exists()
+
+    @pytest.mark.asyncio
+    async def test_pull_skips_unsaved_overview_and_syncs_named_dashboards(
+        self,
+        mock_ha_client: HAClient,
+        temp_sync_dir: Path,
+        sync_config: MockSyncConfig,
+    ) -> None:
+        """Unsaved Overview (config_not_found) must not abort the whole pull."""
+        mock_ha_client.get_dashboards.return_value = [
+            {
+                "url_path": "dashboard-cameras",
+                "title": "Cameras",
+                "icon": "mdi:cctv",
+                "show_in_sidebar": True,
+                "require_admin": False,
+            }
+        ]
+
+        async def configs(url_path: str | None = None) -> dict:
+            if url_path is None:
+                raise HACommandError("config_not_found", "No config found.")
+            return {"views": [{"path": "cameras", "title": "Cameras", "cards": []}]}
+
+        mock_ha_client.get_dashboard_config.side_effect = configs
+
+        syncer = DashboardSyncer(mock_ha_client, sync_config)
+        result = await syncer.pull()
+
+        assert "lovelace" not in result.created
+        assert "cameras" in result.created
+        assert not (sync_config.dashboards_path / "lovelace").exists()
+        assert (sync_config.dashboards_path / "cameras").exists()
+
+    @pytest.mark.asyncio
+    async def test_get_remote_entities_reraises_other_overview_errors(
+        self,
+        mock_ha_client: HAClient,
+        temp_sync_dir: Path,
+        sync_config: MockSyncConfig,
+    ) -> None:
+        """Only config_not_found is ignorable; other WS errors still fail the fetch."""
+        mock_ha_client.get_dashboards.return_value = []
+        mock_ha_client.get_dashboard_config.side_effect = HACommandError(
+            "unknown_command", "Unknown command"
+        )
+
+        syncer = DashboardSyncer(mock_ha_client, sync_config)
+        with pytest.raises(HACommandError) as exc_info:
+            await syncer.get_remote_entities()
+        assert exc_info.value.code == "unknown_command"
+
+    @pytest.mark.asyncio
+    async def test_get_remote_entities_reraises_overview_disconnect(
+        self,
+        mock_ha_client: HAClient,
+        temp_sync_dir: Path,
+        sync_config: MockSyncConfig,
+    ) -> None:
+        """A dropped WebSocket must not be treated as a missing Overview."""
+        mock_ha_client.get_dashboards.return_value = []
+        mock_ha_client.get_dashboard_config.side_effect = ConnectionFailed("closed")
+
+        syncer = DashboardSyncer(mock_ha_client, sync_config)
+        with pytest.raises(ConnectionFailed):
+            await syncer.get_remote_entities()
 
 
 def _fp_tail(file_path: str | None) -> str | None:

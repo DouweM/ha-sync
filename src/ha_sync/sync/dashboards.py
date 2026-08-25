@@ -8,7 +8,7 @@ import logfire
 import yaml
 from rich.console import Console
 
-from ha_sync.client import HAClient
+from ha_sync.client import HAClient, HACommandError
 from ha_sync.config import SyncConfig
 from ha_sync.models import View
 from ha_sync.utils import (
@@ -94,11 +94,15 @@ class DashboardSyncer(BaseSyncer):
         dashboards = await self.client.get_dashboards()
         result: dict[str, dict[str, Any]] = {}
 
-        # Include the default dashboard if it has saved config
-        # (instances using the auto-generated Overview return config_not_found)
+        # Include the default dashboard only if it has saved config.
+        # Fresh HA (and 2026.8+ installs that redirect Overview to /home) return
+        # config_not_found for lovelace/config with no url_path. Skip it so
+        # named dashboards still sync; do not swallow disconnects or other errors.
         try:
             default_config = await self.client.get_dashboard_config(None)
-        except Exception:
+        except HACommandError as err:
+            if err.code != "config_not_found":
+                raise
             default_config = None
         if default_config:
             result["lovelace"] = {

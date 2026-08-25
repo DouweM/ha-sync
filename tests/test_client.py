@@ -116,3 +116,37 @@ class TestSendCommandReconnect:
 
         with pytest.raises(ConnectionFailed):
             await client.send_command("lovelace/config/save", config={"a": 1})
+
+    @pytest.mark.asyncio
+    async def test_raises_ha_command_error_on_unsuccessful_result(self) -> None:
+        import json
+
+        import aiohttp
+
+        from ha_sync.client import HACommandError
+
+        client = HAClient("http://test", "token")
+        client._ws = FakeWS(  # type: ignore[assignment]
+            [
+                FakeWSMessage(
+                    aiohttp.WSMsgType.TEXT,
+                    json.dumps(
+                        {
+                            "id": 1,
+                            "type": "result",
+                            "success": False,
+                            "error": {
+                                "code": "config_not_found",
+                                "message": "No config found.",
+                            },
+                        }
+                    ),
+                )
+            ]
+        )
+
+        with pytest.raises(HACommandError) as exc_info:
+            await client.send_command("lovelace/config")
+
+        assert exc_info.value.code == "config_not_found"
+        assert "No config found." in str(exc_info.value)
