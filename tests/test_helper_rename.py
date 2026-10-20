@@ -110,7 +110,8 @@ async def test_unchanged_name_renames_nothing(
 async def test_registry_name_already_matching_only_sets_title(
     temp_sync_dir: Path, sync_config: MockSyncConfig
 ) -> None:
-    """Renamed by hand in the UI first: the entity already shows the new name."""
+    """Renamed by hand in the UI first: the entity already shows the new name,
+    which is not the old title, so it is not following it and is left alone."""
     client = _client("e1", "Old", _entity("New", "Old"))
     await _push_template(temp_sync_dir, sync_config, client, "New")
 
@@ -122,7 +123,8 @@ async def test_registry_name_already_matching_only_sets_title(
 async def test_device_named_entity_only_gets_the_title(
     temp_sync_dir: Path, sync_config: MockSyncConfig
 ) -> None:
-    """Its registry name is the part after the device's, so leave it alone."""
+    """With no registry name HA shows device name + original name; a registry
+    name would replace that whole friendly name, so leave it alone."""
     client = _client("e1", "Old", _entity(None, "Old", has_entity_name=True))
     await _push_template(temp_sync_dir, sync_config, client, "New")
 
@@ -200,3 +202,70 @@ async def test_generic_config_entry_helper_is_renamed(
     client.update_entity_registry.assert_awaited_once_with(
         "binary_sensor.modem", name="LTE Modem Up One Week"
     )
+
+
+@pytest.mark.asyncio
+async def test_options_only_push_keeps_a_registry_name_override(
+    temp_sync_dir: Path, sync_config: MockSyncConfig
+) -> None:
+    """A name chosen in HA ("Gaby Out") survives a push that only edits options."""
+    client = _client("e1", "Gaby out in the City", _entity("Gaby Out", "Gaby out in the City"))
+    await _push_template(temp_sync_dir, sync_config, client, "Gaby out in the City")
+
+    client.update_template_helper.assert_awaited_once()
+    client.update_config_entry_title.assert_not_awaited()
+    assert not [c for c in client.update_entity_registry.await_args_list if "name" in c.kwargs]
+
+
+@pytest.mark.asyncio
+async def test_rename_keeps_a_registry_name_that_differs_from_the_old_title(
+    temp_sync_dir: Path, sync_config: MockSyncConfig
+) -> None:
+    client = _client("e1", "Gaby out in the City", _entity("Gaby Out", "Gaby out in the City"))
+    await _push_template(temp_sync_dir, sync_config, client, "Gaby in Town")
+
+    client.update_config_entry_title.assert_awaited_once_with("e1", "Gaby in Town")
+    assert not [c for c in client.update_entity_registry.await_args_list if "name" in c.kwargs]
+
+
+@pytest.mark.asyncio
+async def test_rename_moves_a_registry_name_equal_to_the_old_title(
+    temp_sync_dir: Path, sync_config: MockSyncConfig
+) -> None:
+    client = _client("e1", "Old", _entity("Old", "Something Else"))
+    await _push_template(temp_sync_dir, sync_config, client, "New")
+
+    client.update_entity_registry.assert_awaited_once_with(
+        "binary_sensor.out_in_the_city", name="New"
+    )
+    client.update_config_entry_title.assert_awaited_once_with("e1", "New")
+
+
+@pytest.mark.asyncio
+async def test_registry_name_is_written_before_the_title(
+    temp_sync_dir: Path, sync_config: MockSyncConfig
+) -> None:
+    client = _client("e1", "Old", _entity(None, "Old"))
+    order: list[str] = []
+    client.update_entity_registry.side_effect = lambda *a, **k: order.append("registry") or {}
+    client.update_config_entry_title.side_effect = lambda *a, **k: order.append("title")
+    await _push_template(temp_sync_dir, sync_config, client, "New")
+
+    assert order == ["registry", "title"]
+
+
+@pytest.mark.asyncio
+async def test_failed_registry_rename_is_an_error_and_leaves_the_title(
+    temp_sync_dir: Path, sync_config: MockSyncConfig
+) -> None:
+    """The title is what makes the next diff clean, so it must not be written
+    when the friendly name could not be: the rename shows again and is retried."""
+    client = _client("e1", "Old", _entity(None, "Old"))
+    client.update_entity_registry.side_effect = RuntimeError("websocket closed")
+    _template_file(temp_sync_dir, "New")
+    syncer = TemplateSyncer(client, sync_config)  # type: ignore[arg-type]
+    result = await syncer.push(diff_items=_modified("binary_sensor/e1"))
+
+    client.update_config_entry_title.assert_not_awaited()
+    assert [e for e, _ in result.errors] == ["binary_sensor/e1"]
+    assert "binary_sensor/e1" not in result.updated

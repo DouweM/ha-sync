@@ -616,12 +616,26 @@ async def rename_config_entry_helper(
 
     The name a helper is created with becomes both the entry title and the
     entity's original name, and its options flow never asks for it again, so
-    an options update leaves a rename behind. This sets the title (what pull
-    reads back as `name`, so the rename sticks) and, for a helper with a single
-    entity that names itself, the entity registry name (what HA shows as its
-    friendly name). Entities that take their name from a device
-    (`has_entity_name`) only get the title: their registry name is the part
-    after the device's.
+    an options update leaves a rename behind. When the local `name` differs
+    from the title, this sets the title (what pull reads back as `name`, so
+    the rename sticks) and, for a helper with a single entity that was
+    following the title, the entity registry name (what HA shows as its
+    friendly name).
+
+    An entity "follows the title" when it has no registry name or its registry
+    name is the old title. One given its own name in HA ("Gaby Out" on a
+    helper titled "Gaby out in the City") keeps it: a push that only changes
+    options, or renames the title, must not overwrite a name somebody chose.
+
+    Entities that take their name from a device (`has_entity_name`) only get
+    the title. With no registry name, HA shows them as the device's name plus
+    their original name, and setting a registry name would replace that whole
+    friendly name (a registry name is the full friendly name here, even with
+    `has_entity_name`), so renaming one is left to the UI.
+
+    The registry name is written before the title: the title is what makes
+    the next diff clean, so if the registry call fails the rename still shows
+    as a difference and the next push retries it. Errors propagate.
 
     Returns True if anything was (or, in a dry run, would be) renamed.
     """
@@ -629,30 +643,28 @@ async def rename_config_entry_helper(
         (e for e in await client.get_config_entries() if e.get("entry_id") == entry_id),
         None,
     )
-    title = entry.get("title") if entry else None
-    rename_title = entry is not None and title != name
+    if entry is None:
+        return False
+    title = entry.get("title")
+    if title == name:
+        return False
 
     entity = entity_entries[0] if len(entity_entries) == 1 else None
     rename_entity = (
         entity is not None
         and not entity.get("has_entity_name")
-        and (entity.get("name") or entity.get("original_name")) != name
+        and entity.get("name") in (None, title)
     )
 
-    if not rename_title and not rename_entity:
-        return False
-
-    old = title or (entity.get("name") or entity.get("original_name") if entity else "")
     if dry_run:
-        console.print(f"    [cyan]Would rename[/cyan] '{old}' -> '{name}'")
+        console.print(f"    [cyan]Would rename[/cyan] name '{title}' -> '{name}'")
         return True
 
-    if rename_title:
-        await client.update_config_entry_title(entry_id, name)
     if rename_entity:
         assert entity is not None
         await client.update_entity_registry(entity["entity_id"], name=name)
-    console.print(f"    [blue]Renamed[/blue] '{old}' -> '{name}'")
+    await client.update_config_entry_title(entry_id, name)
+    console.print(f"    [blue]Renamed[/blue] name '{title}' -> '{name}'")
     return True
 
 
@@ -788,11 +800,11 @@ class ConfigEntryBasedSyncer(BaseSyncer):
             return None
 
         if dry_run:
-            console.print(f"    [cyan]Would rename[/cyan] {current_id} -> {local_id}")
+            console.print(f"    [cyan]Would rename[/cyan] entity_id {current_id} -> {local_id}")
         else:
             try:
                 await self.client.update_entity_registry(current_id, new_entity_id=local_id)
-                console.print(f"    [blue]Renamed[/blue] {current_id} -> {local_id}")
+                console.print(f"    [blue]Renamed[/blue] entity_id {current_id} -> {local_id}")
                 self._invalidate_entity_registry_cache()
             except Exception as e:
                 console.print(f"    [red]Error renaming[/red] {current_id}: {e}")
@@ -1138,10 +1150,7 @@ class ConfigEntryBasedSyncer(BaseSyncer):
                         if dry_run:
                             console.print(f"  [cyan]Would update[/cyan] {rel_path}")
                             result.updated.append(full_id)
-                            if local_id and entry_id:
-                                await self._update_entity_id(
-                                    entry_id, local_id, subtype, dry_run=True
-                                )
+                            # Same order as a real push: name, then entity_id.
                             if entry_id and "name" in data:
                                 await rename_config_entry_helper(
                                     self.client,
@@ -1150,14 +1159,18 @@ class ConfigEntryBasedSyncer(BaseSyncer):
                                     await self._get_entity_registry_for_entry(entry_id),
                                     dry_run=True,
                                 )
+                            if local_id and entry_id:
+                                await self._update_entity_id(
+                                    entry_id, local_id, subtype, dry_run=True
+                                )
                             continue
 
                         await self._update_helper(entry_id, config)  # type: ignore[arg-type]
-                        result.updated.append(full_id)
                         console.print(f"  [yellow]Updated[/yellow] {rel_path}")
 
                         # The options flow leaves the name alone; see
-                        # rename_config_entry_helper.
+                        # rename_config_entry_helper. A failure here lands in
+                        # result.errors, not result.updated.
                         if entry_id and "name" in data:
                             await rename_config_entry_helper(
                                 self.client,
@@ -1165,6 +1178,7 @@ class ConfigEntryBasedSyncer(BaseSyncer):
                                 data["name"],
                                 await self._get_entity_registry_for_entry(entry_id),
                             )
+                        result.updated.append(full_id)
 
                         # Handle entity_id renaming if id is specified
                         if local_id and entry_id:

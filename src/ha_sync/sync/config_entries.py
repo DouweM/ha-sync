@@ -273,11 +273,11 @@ class ConfigEntrySyncer(BaseSyncer):
             return None
 
         if dry_run:
-            console.print(f"    [cyan]Would rename[/cyan] {current_id} -> {local_id}")
+            console.print(f"    [cyan]Would rename[/cyan] entity_id {current_id} -> {local_id}")
         else:
             try:
                 await self.client.update_entity_registry(current_id, new_entity_id=local_id)
-                console.print(f"    [blue]Renamed[/blue] {current_id} -> {local_id}")
+                console.print(f"    [blue]Renamed[/blue] entity_id {current_id} -> {local_id}")
                 self._invalidate_entity_registry_cache()
             except Exception as e:
                 console.print(f"    [red]Error renaming[/red] {current_id}: {e}")
@@ -535,9 +535,7 @@ class ConfigEntrySyncer(BaseSyncer):
                     if dry_run:
                         console.print(f"  [cyan]Would update[/cyan] {rel_path}")
                         result.updated.append(entry_id)
-                        # Check entity_id rename in dry_run mode too
-                        if local_id:
-                            await self._update_entity_id(entry_id, local_id, dry_run=True)
+                        # Same order as a real push: name, then entity_id.
                         if "name" in data:
                             await rename_config_entry_helper(
                                 self.client,
@@ -546,14 +544,16 @@ class ConfigEntrySyncer(BaseSyncer):
                                 await self._get_entity_registry_for_entry(entry_id),
                                 dry_run=True,
                             )
+                        if local_id:
+                            await self._update_entity_id(entry_id, local_id, dry_run=True)
                         continue
 
                     await self.client.update_config_entry(entry_id, config)
-                    result.updated.append(entry_id)
                     console.print(f"  [yellow]Updated[/yellow] {rel_path}")
 
                     # The options flow leaves the name alone; see
-                    # rename_config_entry_helper.
+                    # rename_config_entry_helper. A failure here lands in
+                    # result.errors, not result.updated.
                     if "name" in data:
                         await rename_config_entry_helper(
                             self.client,
@@ -561,6 +561,7 @@ class ConfigEntrySyncer(BaseSyncer):
                             data["name"],
                             await self._get_entity_registry_for_entry(entry_id),
                         )
+                    result.updated.append(entry_id)
 
                     # Handle entity_id renaming if id is specified
                     if local_id:
