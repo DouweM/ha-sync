@@ -7,8 +7,14 @@ import pytest
 from ha_sync.client import HAClient
 from ha_sync.sync.base import DiffItem
 from ha_sync.sync.dashboards import DashboardSyncer
+from ha_sync.utils import load_yaml
 
-from .conftest import MockSyncConfig, SampleDashboard, create_dashboard_files
+from .conftest import (
+    MockSyncConfig,
+    SampleDashboard,
+    create_dashboard_files,
+    write_yaml_file,
+)
 
 
 class TestDashboardSyncerDiff:
@@ -82,6 +88,48 @@ class TestDashboardSyncerDiff:
         modified_items = [item for item in diff_items if item.status == "modified"]
         assert len(modified_items) == 1
         assert modified_items[0].entity_id == "test"
+
+    @pytest.mark.asyncio
+    async def test_diff_detects_meta_only_change(
+        self,
+        mock_ha_client: HAClient,
+        temp_sync_dir: Path,
+        sync_config: MockSyncConfig,
+    ) -> None:
+        """A dashboard whose views match but whose metadata differs is modified."""
+        view = SampleDashboard.create_view()
+        create_dashboard_files(
+            temp_sync_dir,
+            dir_name="test",
+            title="Test Dashboard",
+            url_path="dashboard-test",
+            views=[view],
+        )
+
+        mock_ha_client.get_dashboards.return_value = [
+            {
+                "url_path": "dashboard-test",
+                "title": "Test Dashboard",
+                "icon": "mdi:home",
+                "show_in_sidebar": False,  # only difference
+                "require_admin": False,
+            }
+        ]
+        mock_ha_client.get_dashboard_config.side_effect = [
+            None,  # no default lovelace config
+            {"views": [view]},  # dashboard-test: views unchanged
+        ]
+
+        syncer = DashboardSyncer(mock_ha_client, sync_config)
+        diff_items = await syncer.diff()
+
+        modified_items = [item for item in diff_items if item.status == "modified"]
+        assert len(modified_items) == 1
+        assert modified_items[0].entity_id == "test"
+        assert modified_items[0].local is not None
+        assert modified_items[0].local["show_in_sidebar"] is True
+        assert modified_items[0].remote is not None
+        assert modified_items[0].remote["show_in_sidebar"] is False
 
     @pytest.mark.asyncio
     async def test_diff_detects_deleted_dashboard(
@@ -350,6 +398,96 @@ class TestDashboardSyncerPull:
 
         # But no directory should exist
         assert not (sync_config.dashboards_path / "lovelace").exists()
+
+    @pytest.mark.asyncio
+    async def test_pull_writes_meta_only_change(
+        self,
+        mock_ha_client: HAClient,
+        temp_sync_dir: Path,
+        sync_config: MockSyncConfig,
+    ) -> None:
+        """Metadata-only remote changes are written, even though views match."""
+        view = SampleDashboard.create_view()
+        create_dashboard_files(
+            temp_sync_dir,
+            dir_name="test",
+            title="Test Dashboard",
+            url_path="dashboard-test",
+            views=[view],
+        )
+
+        mock_ha_client.get_dashboards.return_value = [
+            {
+                "url_path": "dashboard-test",
+                "title": "Renamed Dashboard",
+                "icon": "mdi:home",
+                "show_in_sidebar": False,
+                "require_admin": False,
+            }
+        ]
+        mock_ha_client.get_dashboard_config.side_effect = [
+            None,  # no default lovelace config
+            {"views": [view]},  # dashboard-test: views unchanged
+        ]
+
+        syncer = DashboardSyncer(mock_ha_client, sync_config)
+        result = await syncer.pull()
+
+        assert "test" in result.updated
+        meta = load_yaml(sync_config.dashboards_path / "test" / "_meta.yaml")
+        assert meta is not None
+        assert meta["title"] == "Renamed Dashboard"
+        assert meta["show_in_sidebar"] is False
+
+    @pytest.mark.asyncio
+    async def test_pull_writes_meta_only_change_for_strategy_dashboard(
+        self,
+        mock_ha_client: HAClient,
+        temp_sync_dir: Path,
+        sync_config: MockSyncConfig,
+    ) -> None:
+        """Strategy dashboards have no view files, so meta is all there is."""
+        strategy = {"type": "original-states"}
+        dashboards_dir = sync_config.dashboards_path
+        dashboard_dir = dashboards_dir / "lovelace"
+        dashboard_dir.mkdir(parents=True)
+        write_yaml_file(
+            dashboard_dir,
+            "_meta.yaml",
+            {
+                "title": "Home",
+                "show_in_sidebar": True,
+                "require_admin": False,
+                "url_path": "lovelace",
+                "strategy": strategy,
+                "_config_keys": ["strategy"],
+            },
+        )
+
+        mock_ha_client.get_dashboards.return_value = [
+            {
+                "url_path": "lovelace",
+                "title": "Overview",
+                "icon": "mdi:view-dashboard",
+                "show_in_sidebar": False,
+                "require_admin": False,
+            }
+        ]
+        mock_ha_client.get_dashboard_config.side_effect = [
+            None,  # no saved config for the implicit default
+            {"strategy": strategy},  # lovelace: strategy unchanged
+        ]
+
+        syncer = DashboardSyncer(mock_ha_client, sync_config)
+        result = await syncer.pull()
+
+        assert "lovelace" in result.updated
+        meta = load_yaml(dashboard_dir / "_meta.yaml")
+        assert meta is not None
+        assert meta["title"] == "Overview"
+        assert meta["icon"] == "mdi:view-dashboard"
+        assert meta["show_in_sidebar"] is False
+        assert meta["strategy"] == strategy
 
 
 def _fp_tail(file_path: str | None) -> str | None:
