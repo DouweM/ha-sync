@@ -32,7 +32,7 @@ from ha_sync.utils import (
     relative_path,
 )
 
-from .base import BaseSyncer, DiffItem, SyncResult
+from .base import BaseSyncer, DiffItem, SyncResult, rename_config_entry_helper
 
 console = Console()
 logger = logging.getLogger(__name__)
@@ -538,11 +538,29 @@ class ConfigEntrySyncer(BaseSyncer):
                         # Check entity_id rename in dry_run mode too
                         if local_id:
                             await self._update_entity_id(entry_id, local_id, dry_run=True)
+                        if "name" in data:
+                            await rename_config_entry_helper(
+                                self.client,
+                                entry_id,
+                                data["name"],
+                                await self._get_entity_registry_for_entry(entry_id),
+                                dry_run=True,
+                            )
                         continue
 
                     await self.client.update_config_entry(entry_id, config)
                     result.updated.append(entry_id)
                     console.print(f"  [yellow]Updated[/yellow] {rel_path}")
+
+                    # The options flow leaves the name alone; see
+                    # rename_config_entry_helper.
+                    if "name" in data:
+                        await rename_config_entry_helper(
+                            self.client,
+                            entry_id,
+                            data["name"],
+                            await self._get_entity_registry_for_entry(entry_id),
+                        )
 
                     # Handle entity_id renaming if id is specified
                     if local_id:

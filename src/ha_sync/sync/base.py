@@ -605,6 +605,57 @@ class SimpleEntitySyncer(BaseSyncer):
             return items
 
 
+async def rename_config_entry_helper(
+    client: HAClient,
+    entry_id: str,
+    name: str,
+    entity_entries: list[dict[str, Any]],
+    dry_run: bool = False,
+) -> bool:
+    """Make a config entry helper's name in HA match the local `name`.
+
+    The name a helper is created with becomes both the entry title and the
+    entity's original name, and its options flow never asks for it again, so
+    an options update leaves a rename behind. This sets the title (what pull
+    reads back as `name`, so the rename sticks) and, for a helper with a single
+    entity that names itself, the entity registry name (what HA shows as its
+    friendly name). Entities that take their name from a device
+    (`has_entity_name`) only get the title: their registry name is the part
+    after the device's.
+
+    Returns True if anything was (or, in a dry run, would be) renamed.
+    """
+    entry = next(
+        (e for e in await client.get_config_entries() if e.get("entry_id") == entry_id),
+        None,
+    )
+    title = entry.get("title") if entry else None
+    rename_title = entry is not None and title != name
+
+    entity = entity_entries[0] if len(entity_entries) == 1 else None
+    rename_entity = (
+        entity is not None
+        and not entity.get("has_entity_name")
+        and (entity.get("name") or entity.get("original_name")) != name
+    )
+
+    if not rename_title and not rename_entity:
+        return False
+
+    old = title or (entity.get("name") or entity.get("original_name") if entity else "")
+    if dry_run:
+        console.print(f"    [cyan]Would rename[/cyan] '{old}' -> '{name}'")
+        return True
+
+    if rename_title:
+        await client.update_config_entry_title(entry_id, name)
+    if rename_entity:
+        assert entity is not None
+        await client.update_entity_registry(entity["entity_id"], name=name)
+    console.print(f"    [blue]Renamed[/blue] '{old}' -> '{name}'")
+    return True
+
+
 class ConfigEntryBasedSyncer(BaseSyncer):
     """Base class for config entry-based helper syncers (templates, groups).
 
@@ -1091,11 +1142,29 @@ class ConfigEntryBasedSyncer(BaseSyncer):
                                 await self._update_entity_id(
                                     entry_id, local_id, subtype, dry_run=True
                                 )
+                            if entry_id and "name" in data:
+                                await rename_config_entry_helper(
+                                    self.client,
+                                    entry_id,
+                                    data["name"],
+                                    await self._get_entity_registry_for_entry(entry_id),
+                                    dry_run=True,
+                                )
                             continue
 
                         await self._update_helper(entry_id, config)  # type: ignore[arg-type]
                         result.updated.append(full_id)
                         console.print(f"  [yellow]Updated[/yellow] {rel_path}")
+
+                        # The options flow leaves the name alone; see
+                        # rename_config_entry_helper.
+                        if entry_id and "name" in data:
+                            await rename_config_entry_helper(
+                                self.client,
+                                entry_id,
+                                data["name"],
+                                await self._get_entity_registry_for_entry(entry_id),
+                            )
 
                         # Handle entity_id renaming if id is specified
                         if local_id and entry_id:

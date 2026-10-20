@@ -639,6 +639,16 @@ class HAClient:
             **config,
         }
 
+    @logfire.instrument("Update config entry title: {entry_id}")
+    async def update_config_entry_title(self, entry_id: str, title: str) -> None:
+        """Set a config entry's title.
+
+        A helper's options flow cannot change its name (it is only asked for at
+        creation, and becomes the entry title), so a rename has to go here.
+        """
+        await self.send_command("config_entries/update", entry_id=entry_id, title=title)
+        self.invalidate_config_entries_cache()
+
     @logfire.instrument("Delete config entry: {entry_id}")
     async def delete_config_entry(self, entry_id: str) -> None:
         """Delete a config entry."""
